@@ -1,8 +1,8 @@
 # Keybindings
 
-T3 Code reads keybindings from:
+OCI Code reads keybindings from:
 
-- `~/.t3/keybindings.json`
+- `~/.ocicode/keybindings.json`
 
 The file must be a JSON array of rules:
 

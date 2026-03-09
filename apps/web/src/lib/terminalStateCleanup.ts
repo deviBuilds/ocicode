@@ -1,4 +1,4 @@
-import type { ThreadId } from "@t3tools/contracts";
+import type { ThreadId } from "@ocicode/contracts";
 
 interface TerminalRetentionThread {
   id: ThreadId;

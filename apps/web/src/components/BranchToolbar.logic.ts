@@ -1,4 +1,4 @@
-import type { GitBranch } from "@t3tools/contracts";
+import type { GitBranch } from "@ocicode/contracts";
 
 export type EnvMode = "local" | "worktree";
 

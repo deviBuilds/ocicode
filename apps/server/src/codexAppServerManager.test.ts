@@ -3,7 +3,7 @@ import { randomUUID } from "node:crypto";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { ApprovalRequestId, ThreadId } from "@t3tools/contracts";
+import { ApprovalRequestId, ThreadId } from "@ocicode/contracts";
 
 import {
   buildCodexInitializeParams,
@@ -273,8 +273,8 @@ describe("startSession", () => {
   it("enables Codex experimental api capabilities during initialize", () => {
     expect(buildCodexInitializeParams()).toEqual({
       clientInfo: {
-        name: "t3code_desktop",
-        title: "T3 Code Desktop",
+        name: "ocicode_desktop",
+        title: "OCI Code Desktop",
         version: "0.1.0",
       },
       capabilities: {

@@ -5,7 +5,8 @@
  * API constrained to store actions/selectors.
  */
 
-import type { ThreadId } from "@t3tools/contracts";
+import type { ThreadId } from "@ocicode/contracts";
+import { makeStorageKey } from "@ocicode/shared/branding";
 import { create } from "zustand";
 import { createJSONStorage, persist } from "zustand/middleware";
 import {
@@ -25,7 +26,7 @@ interface ThreadTerminalState {
   activeTerminalGroupId: string;
 }
 
-const TERMINAL_STATE_STORAGE_KEY = "t3code:terminal-state:v1";
+const TERMINAL_STATE_STORAGE_KEY = makeStorageKey("terminal-state:v1");
 
 function normalizeTerminalIds(terminalIds: string[]): string[] {
   const ids = [...new Set(terminalIds.map((id) => id.trim()).filter((id) => id.length > 0))].slice(

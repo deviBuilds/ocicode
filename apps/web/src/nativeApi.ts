@@ -1,4 +1,4 @@
-import type { NativeApi } from "@t3tools/contracts";
+import type { NativeApi } from "@ocicode/contracts";
 
 import { createWsNativeApi } from "./wsNativeApi";
 

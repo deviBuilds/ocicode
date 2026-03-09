@@ -28,7 +28,7 @@ import {
   type KeybindingsConfig,
   type ResolvedKeybindingsConfig,
   type WsPush,
-} from "@t3tools/contracts";
+} from "@ocicode/contracts";
 import { compileResolvedKeybindingRule, DEFAULT_KEYBINDINGS } from "./keybindings";
 import type {
   TerminalClearInput,
@@ -38,7 +38,7 @@ import type {
   TerminalResizeInput,
   TerminalSessionSnapshot,
   TerminalWriteInput,
-} from "@t3tools/contracts";
+} from "@ocicode/contracts";
 import { TerminalManager, type TerminalManagerShape } from "./terminal/Services/Manager";
 import { makeSqlitePersistenceLive, SqlitePersistenceMemory } from "./persistence/Layers/Sqlite";
 import { SqlClient, SqlError } from "effect/unstable/sql";
@@ -50,7 +50,6 @@ import type { GitCoreShape } from "./git/Services/GitCore.ts";
 import { GitCore } from "./git/Services/GitCore.ts";
 import { GitCommandError, GitManagerError } from "./git/Errors.ts";
 import { MigrationError } from "@effect/sql-sqlite-bun/SqliteMigrator";
-import { AnalyticsService } from "./telemetry/Services/AnalyticsService.ts";
 
 interface PendingMessages {
   queue: unknown[];
@@ -402,7 +401,7 @@ describe("WebSocket Server", () => {
       throw new Error("Test server is already running");
     }
 
-    const stateDir = options.stateDir ?? makeTempDir("t3code-ws-state-");
+    const stateDir = options.stateDir ?? makeTempDir("ocicode-ws-state-");
     const scope = await Effect.runPromise(Scope.make("sequential"));
     const persistenceLayer = options.persistenceLayer ?? SqlitePersistenceMemory;
     const providerLayer = options.providerLayer ?? makeServerProviderLayer();
@@ -448,7 +447,6 @@ describe("WebSocket Server", () => {
       Layer.provideMerge(providerHealthLayer),
       Layer.provideMerge(openLayer),
       Layer.provideMerge(serverConfigLayer),
-      Layer.provideMerge(AnalyticsService.layerTest),
       Layer.provideMerge(NodeServices.layer),
     );
     const runtimeServices = await Effect.runPromise(
@@ -507,7 +505,7 @@ describe("WebSocket Server", () => {
   });
 
   it("serves persisted attachments from stateDir", async () => {
-    const stateDir = makeTempDir("t3code-state-attachments-");
+    const stateDir = makeTempDir("ocicode-state-attachments-");
     const attachmentPath = path.join(stateDir, "attachments", "thread-a", "message-a", "0.png");
     fs.mkdirSync(path.dirname(attachmentPath), { recursive: true });
     fs.writeFileSync(attachmentPath, Buffer.from("hello-attachment"));
@@ -525,7 +523,7 @@ describe("WebSocket Server", () => {
   });
 
   it("serves persisted attachments for URL-encoded paths", async () => {
-    const stateDir = makeTempDir("t3code-state-attachments-encoded-");
+    const stateDir = makeTempDir("ocicode-state-attachments-encoded-");
     const attachmentPath = path.join(
       stateDir,
       "attachments",
@@ -551,8 +549,8 @@ describe("WebSocket Server", () => {
   });
 
   it("serves static index for root path", async () => {
-    const stateDir = makeTempDir("t3code-state-static-root-");
-    const staticDir = makeTempDir("t3code-static-root-");
+    const stateDir = makeTempDir("ocicode-state-static-root-");
+    const staticDir = makeTempDir("ocicode-static-root-");
     fs.writeFileSync(path.join(staticDir, "index.html"), "<h1>static-root</h1>", "utf8");
 
     server = await createTestServer({ cwd: "/test/project", stateDir, staticDir });
@@ -566,8 +564,8 @@ describe("WebSocket Server", () => {
   });
 
   it("rejects static path traversal attempts", async () => {
-    const stateDir = makeTempDir("t3code-state-static-traversal-");
-    const staticDir = makeTempDir("t3code-static-traversal-");
+    const stateDir = makeTempDir("ocicode-state-static-traversal-");
+    const staticDir = makeTempDir("ocicode-static-traversal-");
     fs.writeFileSync(path.join(staticDir, "index.html"), "<h1>safe</h1>", "utf8");
 
     server = await createTestServer({ cwd: "/test/project", stateDir, staticDir });
@@ -650,7 +648,7 @@ describe("WebSocket Server", () => {
   });
 
   it("includes bootstrap ids in welcome when cwd project and thread already exist", async () => {
-    const stateDir = makeTempDir("t3code-state-bootstrap-existing-");
+    const stateDir = makeTempDir("ocicode-state-bootstrap-existing-");
     const persistenceLayer = makeSqlitePersistenceLive(path.join(stateDir, "state.sqlite")).pipe(
       Layer.provide(NodeServices.layer),
     );
@@ -734,7 +732,7 @@ describe("WebSocket Server", () => {
   });
 
   it("responds to server.getConfig", async () => {
-    const stateDir = makeTempDir("t3code-state-get-config-");
+    const stateDir = makeTempDir("ocicode-state-get-config-");
     const keybindingsPath = path.join(stateDir, "keybindings.json");
     fs.writeFileSync(keybindingsPath, "[]", "utf8");
 
@@ -762,7 +760,7 @@ describe("WebSocket Server", () => {
   });
 
   it("bootstraps default keybindings file when missing", async () => {
-    const stateDir = makeTempDir("t3code-state-bootstrap-keybindings-");
+    const stateDir = makeTempDir("ocicode-state-bootstrap-keybindings-");
     const keybindingsPath = path.join(stateDir, "keybindings.json");
     expect(fs.existsSync(keybindingsPath)).toBe(false);
 
@@ -793,7 +791,7 @@ describe("WebSocket Server", () => {
   });
 
   it("falls back to defaults and reports malformed keybindings config issues", async () => {
-    const stateDir = makeTempDir("t3code-state-malformed-keybindings-");
+    const stateDir = makeTempDir("ocicode-state-malformed-keybindings-");
     const keybindingsPath = path.join(stateDir, "keybindings.json");
     fs.writeFileSync(keybindingsPath, "{ not-json", "utf8");
 
@@ -825,7 +823,7 @@ describe("WebSocket Server", () => {
   });
 
   it("ignores invalid keybinding entries but keeps valid entries and reports issues", async () => {
-    const stateDir = makeTempDir("t3code-state-partial-invalid-keybindings-");
+    const stateDir = makeTempDir("ocicode-state-partial-invalid-keybindings-");
     const keybindingsPath = path.join(stateDir, "keybindings.json");
     fs.writeFileSync(
       keybindingsPath,
@@ -877,7 +875,7 @@ describe("WebSocket Server", () => {
   });
 
   it("pushes server.configUpdated issues when keybindings file changes", async () => {
-    const stateDir = makeTempDir("t3code-state-keybindings-watch-");
+    const stateDir = makeTempDir("ocicode-state-keybindings-watch-");
     const keybindingsPath = path.join(stateDir, "keybindings.json");
     fs.writeFileSync(keybindingsPath, "[]", "utf8");
 
@@ -942,7 +940,7 @@ describe("WebSocket Server", () => {
   });
 
   it("reads keybindings from the configured state directory", async () => {
-    const stateDir = makeTempDir("t3code-state-keybindings-");
+    const stateDir = makeTempDir("ocicode-state-keybindings-");
     const keybindingsPath = path.join(stateDir, "keybindings.json");
     fs.writeFileSync(
       keybindingsPath,
@@ -979,7 +977,7 @@ describe("WebSocket Server", () => {
   });
 
   it("upserts keybinding rules and updates cached server config", async () => {
-    const stateDir = makeTempDir("t3code-state-upsert-keybinding-");
+    const stateDir = makeTempDir("ocicode-state-upsert-keybinding-");
     const keybindingsPath = path.join(stateDir, "keybindings.json");
     fs.writeFileSync(
       keybindingsPath,
@@ -1108,7 +1106,7 @@ describe("WebSocket Server", () => {
     connections.push(ws);
     await waitForMessage(ws);
 
-    const workspaceRoot = makeTempDir("t3code-ws-diff-project-");
+    const workspaceRoot = makeTempDir("ocicode-ws-diff-project-");
     const createdAt = new Date().toISOString();
     const createProjectResponse = await sendRequest(ws, ORCHESTRATION_WS_METHODS.dispatchCommand, {
       type: "project.create",
@@ -1187,7 +1185,7 @@ describe("WebSocket Server", () => {
     connections.push(ws);
     await waitForMessage(ws);
 
-    const workspaceRoot = makeTempDir("t3code-ws-project-");
+    const workspaceRoot = makeTempDir("ocicode-ws-project-");
     const createdAt = new Date().toISOString();
     const createProjectResponse = await sendRequest(ws, ORCHESTRATION_WS_METHODS.dispatchCommand, {
       type: "project.create",
@@ -1269,7 +1267,7 @@ describe("WebSocket Server", () => {
   });
 
   it("routes terminal RPC methods and broadcasts terminal events", async () => {
-    const cwd = makeTempDir("t3code-ws-terminal-cwd-");
+    const cwd = makeTempDir("ocicode-ws-terminal-cwd-");
     const terminalManager = new MockTerminalManager();
     server = await createTestServer({
       cwd: "/test",
@@ -1442,7 +1440,7 @@ describe("WebSocket Server", () => {
       await new Promise((resolve) => setTimeout(resolve, 50));
       expect(unhandledRejections).toHaveLength(0);
 
-      const workspace = makeTempDir("t3code-ws-handler-still-usable-");
+      const workspace = makeTempDir("ocicode-ws-handler-still-usable-");
       fs.writeFileSync(path.join(workspace, "file.txt"), "ok\n", "utf8");
       const response = await sendRequest(ws, WS_METHODS.projectsSearchEntries, {
         cwd: workspace,
@@ -1492,7 +1490,7 @@ describe("WebSocket Server", () => {
   });
 
   it("supports projects.searchEntries", async () => {
-    const workspace = makeTempDir("t3code-ws-workspace-entries-");
+    const workspace = makeTempDir("ocicode-ws-workspace-entries-");
     fs.mkdirSync(path.join(workspace, "src", "components"), { recursive: true });
     fs.writeFileSync(
       path.join(workspace, "src", "components", "Composer.tsx"),
@@ -1527,7 +1525,7 @@ describe("WebSocket Server", () => {
   });
 
   it("supports projects.writeFile within the workspace root", async () => {
-    const workspace = makeTempDir("t3code-ws-write-file-");
+    const workspace = makeTempDir("ocicode-ws-write-file-");
 
     server = await createTestServer({ cwd: "/test" });
     const addr = server.address();
@@ -1553,7 +1551,7 @@ describe("WebSocket Server", () => {
   });
 
   it("rejects projects.writeFile paths outside the workspace root", async () => {
-    const workspace = makeTempDir("t3code-ws-write-file-reject-");
+    const workspace = makeTempDir("ocicode-ws-write-file-reject-");
 
     server = await createTestServer({ cwd: "/test" });
     const addr = server.address();

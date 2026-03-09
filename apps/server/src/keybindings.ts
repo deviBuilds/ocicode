@@ -16,7 +16,7 @@ import {
   ResolvedKeybindingRule,
   ResolvedKeybindingsConfig,
   type ServerConfigIssue,
-} from "@t3tools/contracts";
+} from "@ocicode/contracts";
 import { Mutable } from "effect/Types";
 import {
   Array,
@@ -499,7 +499,7 @@ export interface KeybindingsShape {
  * Keybindings - Service tag for keybinding configuration operations.
  */
 export class Keybindings extends ServiceMap.Service<Keybindings, KeybindingsShape>()(
-  "t3/keybindings",
+  "ocicode/keybindings",
 ) {}
 
 const makeKeybindings = Effect.gen(function* () {

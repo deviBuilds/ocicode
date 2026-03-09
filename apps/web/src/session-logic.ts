@@ -6,7 +6,7 @@ import {
   type ProviderKind,
   type UserInputQuestion,
   type TurnId,
-} from "@t3tools/contracts";
+} from "@ocicode/contracts";
 
 import type { ChatMessage, ProposedPlan, SessionPhase, ThreadSession, TurnDiffSummary } from "./types";
 

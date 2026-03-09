@@ -5,7 +5,7 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <meta name="description" content="T3 Code — The best way to code with AI." />
+    <meta name="description" content="OCI Code — The best way to code with AI." />
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link
@@ -16,16 +16,20 @@
     <link rel="icon" type="image/png" href="/favicon-32x32.png" sizes="32x32" />
     <link rel="icon" type="image/png" href="/favicon-16x16.png" sizes="16x16" />
     <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
-    <title>T3 Code</title>
+    <title>OCI Code</title>
   </head>
   <body>
     <div class="page">
       <nav class="nav">
         <a href="/" class="nav-brand">
-          <img src="/icon.png" alt="T3" class="nav-icon" />
+          <img src="/icon.png" alt="OCI" class="nav-icon" />
+          <span class="nav-brand-copy">
+            <span class="nav-brand-title">OCI Code</span>
+            <span class="nav-brand-subtitle">Codex-first coding cockpit</span>
+          </span>
         </a>
         <a
-          href="https://github.com/pingdotgg/t3code"
+          href="https://github.com/ocicode/oci-code"
           target="_blank"
           rel="noopener noreferrer"
           class="nav-github"
@@ -36,10 +40,10 @@
       </nav>
 
       <main class="main">
-        <h1 class="tagline">T3 Code is the best way to code with AI.</h1>
+        <h1 class="tagline">OCI Code is the best way to code with AI.</h1>
 
         <a
-          href="https://github.com/pingdotgg/t3code/releases"
+          href="https://github.com/ocicode/oci-code/releases"
           target="_blank"
           rel="noopener noreferrer"
           class="hero-button"
@@ -48,15 +52,15 @@
         </a>
 
         <div class="screenshot-wrap">
-          <img src="/screenshot.jpeg" alt="T3 Code" class="screenshot" />
+          <img src="/screenshot.jpeg" alt="OCI Code" class="screenshot" />
         </div>
 
       </main>
 
       <footer class="footer">
-        <span class="footer-copy">&copy; {new Date().getFullYear()} T3 Tools Inc</span>
+        <span class="footer-copy">&copy; {new Date().getFullYear()} OCI Code</span>
         <div class="footer-links">
-          <a href="https://github.com/pingdotgg/t3code" target="_blank" rel="noopener noreferrer">GitHub</a>
+          <a href="https://github.com/ocicode/oci-code" target="_blank" rel="noopener noreferrer">GitHub</a>
           <a href="https://discord.gg/jn4EGJjrvv" target="_blank" rel="noopener noreferrer">Discord</a>
         </div>
       </footer>
@@ -142,12 +146,35 @@
   .nav-brand {
     display: flex;
     align-items: center;
+    gap: 0.85rem;
   }
 
   .nav-icon {
     width: 28px;
     height: 28px;
     border-radius: 6px;
+    box-shadow: 0 10px 30px rgba(94, 208, 216, 0.18);
+  }
+
+  .nav-brand-copy {
+    display: flex;
+    flex-direction: column;
+    gap: 0.12rem;
+  }
+
+  .nav-brand-title {
+    color: var(--fg);
+    font-size: 0.82rem;
+    font-weight: 600;
+    letter-spacing: 0.16em;
+    text-transform: uppercase;
+  }
+
+  .nav-brand-subtitle {
+    color: var(--fg-dim);
+    font-size: 0.68rem;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
   }
 
   .nav-github {
@@ -199,7 +226,7 @@
 
   .hero-button {
     display: inline-block;
-    background: #fafafa;
+    background: linear-gradient(135deg, #faf7ef 0%, #d2f3f6 100%);
     color: #09090b;
     padding: 0.75rem 2rem;
     border-radius: 999px;
@@ -213,7 +240,7 @@
 
   .hero-button:hover {
     transform: scale(1.03);
-    box-shadow: 0 0 24px rgba(255, 255, 255, 0.08);
+    box-shadow: 0 0 32px rgba(94, 208, 216, 0.18);
   }
 
   .hero-button:active {
@@ -307,6 +334,10 @@
   @media (max-width: 640px) {
     .nav {
       padding: 1.25rem 1.25rem;
+    }
+
+    .nav-brand-subtitle {
+      display: none;
     }
 
     .main {

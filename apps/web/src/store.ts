@@ -5,13 +5,14 @@ import {
   ThreadId,
   type OrchestrationReadModel,
   type OrchestrationSessionStatus,
-} from "@t3tools/contracts";
+} from "@ocicode/contracts";
 import {
   getModelOptions,
   normalizeModelSlug,
   resolveModelSlug,
   resolveModelSlugForProvider,
-} from "@t3tools/shared/model";
+} from "@ocicode/shared/model";
+import { makeStorageKey } from "@ocicode/shared/branding";
 import { create } from "zustand";
 import { type ChatMessage, type Project, type Thread } from "./types";
 
@@ -23,17 +24,7 @@ export interface AppState {
   threadsHydrated: boolean;
 }
 
-const PERSISTED_STATE_KEY = "t3code:renderer-state:v8";
-const LEGACY_PERSISTED_STATE_KEYS = [
-  "t3code:renderer-state:v6",
-  "t3code:renderer-state:v5",
-  "t3code:renderer-state:v4",
-  "t3code:renderer-state:v3",
-  "codething:renderer-state:v4",
-  "codething:renderer-state:v3",
-  "codething:renderer-state:v2",
-  "codething:renderer-state:v1",
-] as const;
+const PERSISTED_STATE_KEY = makeStorageKey("renderer-state:v8");
 
 const initialState: AppState = {
   projects: [],
@@ -73,9 +64,6 @@ function persistState(state: AppState): void {
           .map((project) => project.cwd),
       }),
     );
-    for (const legacyKey of LEGACY_PERSISTED_STATE_KEYS) {
-      window.localStorage.removeItem(legacyKey);
-    }
   } catch {
     // Ignore quota/storage errors to avoid breaking chat UX.
   }

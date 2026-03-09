@@ -5,7 +5,7 @@ The web app communicates with the server via WebSocket using a simple JSON-RPC-s
 - **Request/Response**: `{ id, method, params }` → `{ id, result }` or `{ id, error }`
 - **Push events**: `{ type: "push", channel, data }` for orchestration read-model updates
 
-Methods mirror the `NativeApi` interface defined in `@t3tools/contracts`:
+Methods mirror the `NativeApi` interface defined in `@ocicode/contracts`:
 
 - `providers.startSession`, `providers.sendTurn`, `providers.interruptTurn`
 - `providers.respondToRequest`, `providers.stopSession`

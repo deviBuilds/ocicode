@@ -2,6 +2,7 @@ import {
   LexicalComposer,
   type InitialConfigType,
 } from "@lexical/react/LexicalComposer";
+import { COMPOSER_EDITOR_NAMESPACE } from "@ocicode/shared/branding";
 import { useLexicalComposerContext } from "@lexical/react/LexicalComposerContext";
 import { ContentEditable } from "@lexical/react/LexicalContentEditable";
 import { LexicalErrorBoundary } from "@lexical/react/LexicalErrorBoundary";
@@ -779,7 +780,7 @@ export const ComposerPromptEditor = forwardRef<ComposerPromptEditorHandle, Compo
     const initialValueRef = useRef(value);
     const initialConfig = useMemo<InitialConfigType>(
       () => ({
-        namespace: "t3tools-composer-editor",
+        namespace: COMPOSER_EDITOR_NAMESPACE,
         editable: true,
         nodes: [ComposerMentionNode],
         editorState: () => {

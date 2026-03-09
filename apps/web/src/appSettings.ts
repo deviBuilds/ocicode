@@ -1,9 +1,10 @@
 import { useCallback, useSyncExternalStore } from "react";
 import { Option, Schema } from "effect";
-import { type ProviderKind, type ProviderServiceTier } from "@t3tools/contracts";
-import { getDefaultModel, getModelOptions, normalizeModelSlug } from "@t3tools/shared/model";
+import { type ProviderKind, type ProviderServiceTier } from "@ocicode/contracts";
+import { makeStorageKey } from "@ocicode/shared/branding";
+import { getDefaultModel, getModelOptions, normalizeModelSlug } from "@ocicode/shared/model";
 
-const APP_SETTINGS_STORAGE_KEY = "t3code:app-settings:v1";
+const APP_SETTINGS_STORAGE_KEY = makeStorageKey("app-settings:v1");
 const MAX_CUSTOM_MODEL_COUNT = 32;
 export const MAX_CUSTOM_MODEL_LENGTH = 256;
 export const APP_SERVICE_TIER_OPTIONS = [

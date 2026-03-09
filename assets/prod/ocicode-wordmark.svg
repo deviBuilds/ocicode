@@ -1,0 +1,8 @@
+<svg width="720" height="160" viewBox="0 0 720 160" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <rect x="8" y="8" width="144" height="144" rx="36" fill="#0D1217" />
+  <rect x="30" y="32" width="32" height="96" rx="16" stroke="#F4EEDF" stroke-width="8" />
+  <path d="M96 40C88.648 32.272 78.304 28 66.8 28C44.818 28 27 45.818 27 67.8V92.2C27 114.182 44.818 132 66.8 132C78.304 132 88.648 127.728 96 120" transform="translate(36 0)" stroke="#F4EEDF" stroke-width="8" stroke-linecap="round" />
+  <rect x="118" y="32" width="20" height="96" rx="10" fill="#5ED0D8" />
+  <text x="188" y="76" fill="#F4EEDF" font-family="'Avenir Next', 'Segoe UI', sans-serif" font-size="48" font-weight="700" letter-spacing="0.18em">OCI</text>
+  <text x="188" y="122" fill="#7E8B98" font-family="'Avenir Next', 'Segoe UI', sans-serif" font-size="20" font-weight="600" letter-spacing="0.36em">CODE</text>
+</svg>

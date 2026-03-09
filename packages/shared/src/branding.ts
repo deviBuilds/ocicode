@@ -1,0 +1,26 @@
+export const APP_BASE_NAME = "OCI Code";
+export const APP_OWNER_NAME = "OCI Code";
+export const CLI_NAME = "ocicode";
+export const DESKTOP_PROTOCOL_SCHEME = "ocicode";
+export const DESKTOP_BUNDLE_ID = "com.ocicode.ocicode";
+export const DESKTOP_PROVIDER_NAME = "ocicode_desktop";
+export const ENV_PREFIX = "OCICODE";
+export const GITHUB_OWNER = "ocicode";
+export const GITHUB_REPO = "oci-code";
+export const GITHUB_REPO_SLUG = `${GITHUB_OWNER}/${GITHUB_REPO}`;
+export const GITHUB_REPO_URL = `https://github.com/${GITHUB_REPO_SLUG}`;
+export const STATE_ROOT_DIRNAME = ".ocicode";
+export const USERDATA_DIRNAME = "userdata";
+export const DEV_STATE_DIRNAME = "dev";
+export const WORKTREES_DIRNAME = "worktrees";
+export const STORAGE_KEY_PREFIX = "ocicode";
+export const WORKTREE_BRANCH_PREFIX = "ocicode";
+export const SHELL_PATH_CAPTURE_START = "__OCICODE_PATH_START__";
+export const SHELL_PATH_CAPTURE_END = "__OCICODE_PATH_END__";
+export const COMPOSER_EDITOR_NAMESPACE = "ocicode-composer-editor";
+export const GIT_IDENTITY_NAME = APP_BASE_NAME;
+export const GIT_IDENTITY_EMAIL = "ocicode@users.noreply.github.com";
+export const DESKTOP_ARTIFACT_NAME_TEMPLATE = "OCI-Code-${version}-${arch}.${ext}";
+export const STAGED_DESKTOP_PACKAGE_NAME = "ocicode-desktop";
+
+export const makeStorageKey = (suffix: string): string => `${STORAGE_KEY_PREFIX}:${suffix}`;

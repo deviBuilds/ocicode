@@ -8,7 +8,7 @@ import {
   WS_CHANNELS,
   WS_METHODS,
   type ServerProviderStatus,
-} from "@t3tools/contracts";
+} from "@ocicode/contracts";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const requestMock = vi.fn<(...args: Array<unknown>) => Promise<unknown>>();
@@ -96,7 +96,7 @@ describe("wsNativeApi", () => {
     const listener = vi.fn();
     onServerWelcome(listener);
 
-    const payload = { cwd: "/tmp/workspace", projectName: "t3-code" };
+    const payload = { cwd: "/tmp/workspace", projectName: "oci-code" };
     emitPush(WS_CHANNELS.serverWelcome, payload);
 
     expect(listener).toHaveBeenCalledTimes(1);
@@ -119,7 +119,7 @@ describe("wsNativeApi", () => {
 
     emitPush(WS_CHANNELS.serverWelcome, {
       cwd: "/tmp/workspace",
-      projectName: "t3-code",
+      projectName: "oci-code",
       bootstrapProjectId: "project-1",
       bootstrapThreadId: "thread-1",
     });
@@ -128,7 +128,7 @@ describe("wsNativeApi", () => {
     expect(listener).toHaveBeenCalledWith(
       expect.objectContaining({
         cwd: "/tmp/workspace",
-        projectName: "t3-code",
+        projectName: "oci-code",
         bootstrapProjectId: "project-1",
         bootstrapThreadId: "thread-1",
       }),
@@ -143,17 +143,17 @@ describe("wsNativeApi", () => {
     const listener = vi.fn();
     onServerWelcome(listener);
 
-    emitPush(WS_CHANNELS.serverWelcome, { cwd: 42, projectName: "t3-code" });
-    emitPush(WS_CHANNELS.serverWelcome, { cwd: "/tmp/workspace", projectName: "t3-code" });
+    emitPush(WS_CHANNELS.serverWelcome, { cwd: 42, projectName: "oci-code" });
+    emitPush(WS_CHANNELS.serverWelcome, { cwd: "/tmp/workspace", projectName: "oci-code" });
 
     expect(listener).toHaveBeenCalledTimes(1);
     expect(listener).toHaveBeenCalledWith(
-      expect.objectContaining({ cwd: "/tmp/workspace", projectName: "t3-code" }),
+      expect.objectContaining({ cwd: "/tmp/workspace", projectName: "oci-code" }),
     );
     expect(warnSpy).toHaveBeenCalledTimes(1);
     expect(warnSpy).toHaveBeenCalledWith("Dropped inbound WebSocket push payload", {
       reason: "decode-failed",
-      raw: { cwd: 42, projectName: "t3-code" },
+      raw: { cwd: 42, projectName: "oci-code" },
       issue: expect.stringContaining("SchemaError"),
     });
   });

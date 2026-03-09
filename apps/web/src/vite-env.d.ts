@@ -1,6 +1,6 @@
 /// <reference types="vite/client" />
 
-import type { NativeApi, DesktopBridge } from "@t3tools/contracts";
+import type { NativeApi, DesktopBridge } from "@ocicode/contracts";
 
 declare global {
   interface Window {

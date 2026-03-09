@@ -9,7 +9,7 @@ import {
   WS_CHANNELS,
   WS_METHODS,
   WsWelcomePayload,
-} from "@t3tools/contracts";
+} from "@ocicode/contracts";
 import { Cause, Schema } from "effect";
 
 import { showContextMenuFallback } from "./contextMenuFallback";

@@ -1,13 +1,13 @@
 {
-  "name": "t3",
+  "name": "ocicode",
   "version": "0.0.4-alpha.1",
   "repository": {
     "type": "git",
-    "url": "https://github.com/pingdotgg/t3code",
+    "url": "https://github.com/ocicode/oci-code",
     "directory": "apps/server"
   },
   "bin": {
-    "t3": "./dist/index.mjs"
+    "ocicode": "./dist/index.mjs"
   },
   "files": [
     "dist"
@@ -33,9 +33,9 @@
   "devDependencies": {
     "@effect/language-service": "catalog:",
     "@effect/vitest": "catalog:",
-    "@t3tools/contracts": "workspace:*",
-    "@t3tools/shared": "workspace:*",
-    "@t3tools/web": "workspace:*",
+    "@ocicode/contracts": "workspace:*",
+    "@ocicode/shared": "workspace:*",
+    "@ocicode/web": "workspace:*",
     "@types/bun": "catalog:",
     "@types/node": "catalog:",
     "@types/ws": "^8.5.13",

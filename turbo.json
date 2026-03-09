@@ -5,13 +5,13 @@
     "VITE_WS_URL",
     "VITE_DEV_SERVER_URL",
     "ELECTRON_RENDERER_PORT",
-    "T3CODE_LOG_WS_EVENTS",
-    "T3CODE_MODE",
-    "T3CODE_PORT",
-    "T3CODE_NO_BROWSER",
-    "T3CODE_STATE_DIR",
-    "T3CODE_AUTH_TOKEN",
-    "T3CODE_DESKTOP_WS_URL"
+    "OCICODE_LOG_WS_EVENTS",
+    "OCICODE_MODE",
+    "OCICODE_PORT",
+    "OCICODE_NO_BROWSER",
+    "OCICODE_STATE_DIR",
+    "OCICODE_AUTH_TOKEN",
+    "OCICODE_DESKTOP_WS_URL"
   ],
   "tasks": {
     "build": {
@@ -19,7 +19,7 @@
       "outputs": ["dist/**", "dist-electron/**"]
     },
     "dev": {
-      "dependsOn": ["@t3tools/contracts#build"],
+      "dependsOn": ["@ocicode/contracts#build"],
       "cache": false,
       "persistent": true
     },

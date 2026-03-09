@@ -42,29 +42,29 @@ function makeFakeCodexBinary(dir: string) {
         "  shift",
         "done",
         'stdin_content="$(cat)"',
-        'if [ "$T3_FAKE_CODEX_REQUIRE_IMAGE" = "1" ] && [ "$seen_image" != "1" ]; then',
+        'if [ "$OCICODE_FAKE_CODEX_REQUIRE_IMAGE" = "1" ] && [ "$seen_image" != "1" ]; then',
         '  printf "%s\\n" "missing --image input" >&2',
         "  exit 2",
         "fi",
-        'if [ -n "$T3_FAKE_CODEX_STDIN_MUST_CONTAIN" ]; then',
-        '  printf "%s" "$stdin_content" | grep -F -- "$T3_FAKE_CODEX_STDIN_MUST_CONTAIN" >/dev/null || {',
+        'if [ -n "$OCICODE_FAKE_CODEX_STDIN_MUST_CONTAIN" ]; then',
+        '  printf "%s" "$stdin_content" | grep -F -- "$OCICODE_FAKE_CODEX_STDIN_MUST_CONTAIN" >/dev/null || {',
         '    printf "%s\\n" "stdin missing expected content" >&2',
         "    exit 3",
         "  }",
         "fi",
-        'if [ -n "$T3_FAKE_CODEX_STDIN_MUST_NOT_CONTAIN" ]; then',
-        '  if printf "%s" "$stdin_content" | grep -F -- "$T3_FAKE_CODEX_STDIN_MUST_NOT_CONTAIN" >/dev/null; then',
+        'if [ -n "$OCICODE_FAKE_CODEX_STDIN_MUST_NOT_CONTAIN" ]; then',
+        '  if printf "%s" "$stdin_content" | grep -F -- "$OCICODE_FAKE_CODEX_STDIN_MUST_NOT_CONTAIN" >/dev/null; then',
         '    printf "%s\\n" "stdin contained forbidden content" >&2',
         "    exit 4",
         "  fi",
         "fi",
-        'if [ -n "$T3_FAKE_CODEX_STDERR" ]; then',
-        '  printf "%s\\n" "$T3_FAKE_CODEX_STDERR" >&2',
+        'if [ -n "$OCICODE_FAKE_CODEX_STDERR" ]; then',
+        '  printf "%s\\n" "$OCICODE_FAKE_CODEX_STDERR" >&2',
         "fi",
         'if [ -n "$output_path" ]; then',
-        '  node -e \'const fs=require("node:fs"); const value=process.argv[2] ?? ""; fs.writeFileSync(process.argv[1], Buffer.from(value, "base64"));\' "$output_path" "${T3_FAKE_CODEX_OUTPUT_B64:-e30=}"',
+        '  node -e \'const fs=require("node:fs"); const value=process.argv[2] ?? ""; fs.writeFileSync(process.argv[1], Buffer.from(value, "base64"));\' "$output_path" "${OCICODE_FAKE_CODEX_OUTPUT_B64:-e30=}"',
         "fi",
-        'exit "${T3_FAKE_CODEX_EXIT_CODE:-0}"',
+        'exit "${OCICODE_FAKE_CODEX_EXIT_CODE:-0}"',
         "",
       ].join("\n"),
     );
@@ -87,48 +87,48 @@ function withFakeCodexEnv<A, E, R>(
   return Effect.acquireUseRelease(
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
-      const tempDir = yield* fs.makeTempDirectoryScoped({ prefix: "t3code-codex-text-" });
+      const tempDir = yield* fs.makeTempDirectoryScoped({ prefix: "ocicode-codex-text-" });
       const binDir = yield* makeFakeCodexBinary(tempDir);
       const previousPath = process.env.PATH;
-      const previousOutput = process.env.T3_FAKE_CODEX_OUTPUT_B64;
-      const previousExitCode = process.env.T3_FAKE_CODEX_EXIT_CODE;
-      const previousStderr = process.env.T3_FAKE_CODEX_STDERR;
-      const previousRequireImage = process.env.T3_FAKE_CODEX_REQUIRE_IMAGE;
-      const previousStdinMustContain = process.env.T3_FAKE_CODEX_STDIN_MUST_CONTAIN;
-      const previousStdinMustNotContain = process.env.T3_FAKE_CODEX_STDIN_MUST_NOT_CONTAIN;
+      const previousOutput = process.env.OCICODE_FAKE_CODEX_OUTPUT_B64;
+      const previousExitCode = process.env.OCICODE_FAKE_CODEX_EXIT_CODE;
+      const previousStderr = process.env.OCICODE_FAKE_CODEX_STDERR;
+      const previousRequireImage = process.env.OCICODE_FAKE_CODEX_REQUIRE_IMAGE;
+      const previousStdinMustContain = process.env.OCICODE_FAKE_CODEX_STDIN_MUST_CONTAIN;
+      const previousStdinMustNotContain = process.env.OCICODE_FAKE_CODEX_STDIN_MUST_NOT_CONTAIN;
 
       yield* Effect.sync(() => {
         process.env.PATH = `${binDir}:${previousPath ?? ""}`;
-        process.env.T3_FAKE_CODEX_OUTPUT_B64 = Buffer.from(input.output, "utf8").toString("base64");
+        process.env.OCICODE_FAKE_CODEX_OUTPUT_B64 = Buffer.from(input.output, "utf8").toString("base64");
 
         if (input.exitCode !== undefined) {
-          process.env.T3_FAKE_CODEX_EXIT_CODE = String(input.exitCode);
+          process.env.OCICODE_FAKE_CODEX_EXIT_CODE = String(input.exitCode);
         } else {
-          delete process.env.T3_FAKE_CODEX_EXIT_CODE;
+          delete process.env.OCICODE_FAKE_CODEX_EXIT_CODE;
         }
 
         if (input.stderr !== undefined) {
-          process.env.T3_FAKE_CODEX_STDERR = input.stderr;
+          process.env.OCICODE_FAKE_CODEX_STDERR = input.stderr;
         } else {
-          delete process.env.T3_FAKE_CODEX_STDERR;
+          delete process.env.OCICODE_FAKE_CODEX_STDERR;
         }
 
         if (input.requireImage) {
-          process.env.T3_FAKE_CODEX_REQUIRE_IMAGE = "1";
+          process.env.OCICODE_FAKE_CODEX_REQUIRE_IMAGE = "1";
         } else {
-          delete process.env.T3_FAKE_CODEX_REQUIRE_IMAGE;
+          delete process.env.OCICODE_FAKE_CODEX_REQUIRE_IMAGE;
         }
 
         if (input.stdinMustContain !== undefined) {
-          process.env.T3_FAKE_CODEX_STDIN_MUST_CONTAIN = input.stdinMustContain;
+          process.env.OCICODE_FAKE_CODEX_STDIN_MUST_CONTAIN = input.stdinMustContain;
         } else {
-          delete process.env.T3_FAKE_CODEX_STDIN_MUST_CONTAIN;
+          delete process.env.OCICODE_FAKE_CODEX_STDIN_MUST_CONTAIN;
         }
 
         if (input.stdinMustNotContain !== undefined) {
-          process.env.T3_FAKE_CODEX_STDIN_MUST_NOT_CONTAIN = input.stdinMustNotContain;
+          process.env.OCICODE_FAKE_CODEX_STDIN_MUST_NOT_CONTAIN = input.stdinMustNotContain;
         } else {
-          delete process.env.T3_FAKE_CODEX_STDIN_MUST_NOT_CONTAIN;
+          delete process.env.OCICODE_FAKE_CODEX_STDIN_MUST_NOT_CONTAIN;
         }
       });
 
@@ -148,39 +148,39 @@ function withFakeCodexEnv<A, E, R>(
         process.env.PATH = previous.previousPath;
 
         if (previous.previousOutput === undefined) {
-          delete process.env.T3_FAKE_CODEX_OUTPUT_B64;
+          delete process.env.OCICODE_FAKE_CODEX_OUTPUT_B64;
         } else {
-          process.env.T3_FAKE_CODEX_OUTPUT_B64 = previous.previousOutput;
+          process.env.OCICODE_FAKE_CODEX_OUTPUT_B64 = previous.previousOutput;
         }
 
         if (previous.previousExitCode === undefined) {
-          delete process.env.T3_FAKE_CODEX_EXIT_CODE;
+          delete process.env.OCICODE_FAKE_CODEX_EXIT_CODE;
         } else {
-          process.env.T3_FAKE_CODEX_EXIT_CODE = previous.previousExitCode;
+          process.env.OCICODE_FAKE_CODEX_EXIT_CODE = previous.previousExitCode;
         }
 
         if (previous.previousStderr === undefined) {
-          delete process.env.T3_FAKE_CODEX_STDERR;
+          delete process.env.OCICODE_FAKE_CODEX_STDERR;
         } else {
-          process.env.T3_FAKE_CODEX_STDERR = previous.previousStderr;
+          process.env.OCICODE_FAKE_CODEX_STDERR = previous.previousStderr;
         }
 
         if (previous.previousRequireImage === undefined) {
-          delete process.env.T3_FAKE_CODEX_REQUIRE_IMAGE;
+          delete process.env.OCICODE_FAKE_CODEX_REQUIRE_IMAGE;
         } else {
-          process.env.T3_FAKE_CODEX_REQUIRE_IMAGE = previous.previousRequireImage;
+          process.env.OCICODE_FAKE_CODEX_REQUIRE_IMAGE = previous.previousRequireImage;
         }
 
         if (previous.previousStdinMustContain === undefined) {
-          delete process.env.T3_FAKE_CODEX_STDIN_MUST_CONTAIN;
+          delete process.env.OCICODE_FAKE_CODEX_STDIN_MUST_CONTAIN;
         } else {
-          process.env.T3_FAKE_CODEX_STDIN_MUST_CONTAIN = previous.previousStdinMustContain;
+          process.env.OCICODE_FAKE_CODEX_STDIN_MUST_CONTAIN = previous.previousStdinMustContain;
         }
 
         if (previous.previousStdinMustNotContain === undefined) {
-          delete process.env.T3_FAKE_CODEX_STDIN_MUST_NOT_CONTAIN;
+          delete process.env.OCICODE_FAKE_CODEX_STDIN_MUST_NOT_CONTAIN;
         } else {
-          process.env.T3_FAKE_CODEX_STDIN_MUST_NOT_CONTAIN = previous.previousStdinMustNotContain;
+          process.env.OCICODE_FAKE_CODEX_STDIN_MUST_NOT_CONTAIN = previous.previousStdinMustNotContain;
         }
       }),
   );

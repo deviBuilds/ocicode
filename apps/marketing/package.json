@@ -1,13 +1,13 @@
 {
-  "name": "@t3tools/marketing",
+  "name": "@ocicode/marketing",
   "version": "0.0.0",
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "astro dev",
-    "build": "astro build",
-    "preview": "astro preview",
-    "typecheck": "astro check"
+    "dev": "node scripts/astro.mjs dev",
+    "build": "node scripts/astro.mjs build",
+    "preview": "node scripts/astro.mjs preview",
+    "typecheck": "node scripts/astro.mjs check"
   },
   "dependencies": {
     "astro": "^5.7.13"

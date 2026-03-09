@@ -1,5 +1,5 @@
 {
-  "name": "@t3tools/shared",
+  "name": "@ocicode/shared",
   "version": "0.0.0-alpha.1",
   "private": true,
   "type": "module",
@@ -16,6 +16,10 @@
       "types": "./src/logging.ts",
       "import": "./src/logging.ts"
     },
+    "./branding": {
+      "types": "./src/branding.ts",
+      "import": "./src/branding.ts"
+    },
     "./shell": {
       "types": "./src/shell.ts",
       "import": "./src/shell.ts"
@@ -31,7 +35,7 @@
     "test": "vitest run"
   },
   "dependencies": {
-    "@t3tools/contracts": "workspace:*",
+    "@ocicode/contracts": "workspace:*",
     "effect": "catalog:"
   },
   "devDependencies": {
