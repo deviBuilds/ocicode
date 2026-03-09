@@ -1,4 +1,5 @@
-import { Effect, Layer } from "effect";
+import { Effect, Layer, Schema } from "effect";
+import { PositiveInt, TrimmedNonEmptyString } from "@ocicode/contracts";
 
 import { runProcess } from "../../processRunner";
 import { GitHubCliError } from "../Errors.ts";
@@ -44,59 +45,30 @@ function normalizeGitHubCliError(operation: "execute" | "stdout", error: unknown
   });
 }
 
-function parseOpenPullRequests(raw: string): ReadonlyArray<{
-  number: number;
-  title: string;
-  url: string;
-  baseRefName: string;
-  headRefName: string;
-}> {
-  const trimmed = raw.trim();
-  if (trimmed.length === 0) return [];
+const RawGitHubPullRequestSchema = Schema.Struct({
+  number: PositiveInt,
+  title: TrimmedNonEmptyString,
+  url: TrimmedNonEmptyString,
+  baseRefName: TrimmedNonEmptyString,
+  headRefName: TrimmedNonEmptyString,
+});
 
-  const parsed: unknown = JSON.parse(trimmed);
-  if (!Array.isArray(parsed)) {
-    throw new Error("GitHub CLI returned non-array JSON.");
-  }
-
-  const result: Array<{
-    number: number;
-    title: string;
-    url: string;
-    baseRefName: string;
-    headRefName: string;
-  }> = [];
-  for (const entry of parsed) {
-    if (!entry || typeof entry !== "object") {
-      continue;
-    }
-    const record = entry as Record<string, unknown>;
-    const number = record.number;
-    const title = record.title;
-    const url = record.url;
-    const baseRefName = record.baseRefName;
-    const headRefName = record.headRefName;
-    if (
-      typeof number !== "number" ||
-      !Number.isInteger(number) ||
-      number <= 0 ||
-      typeof title !== "string" ||
-      typeof url !== "string" ||
-      typeof baseRefName !== "string" ||
-      typeof headRefName !== "string"
-    ) {
-      continue;
-    }
-    result.push({
-      number,
-      title,
-      url,
-      baseRefName,
-      headRefName,
-    });
-  }
-
-  return result;
+function decodeGitHubJson<S extends Schema.Top>(
+  raw: string,
+  schema: S,
+  operation: "listOpenPullRequests",
+  invalidDetail: string,
+): Effect.Effect<S["Type"], GitHubCliError, S["DecodingServices"]> {
+  return Schema.decodeEffect(Schema.fromJsonString(schema))(raw).pipe(
+    Effect.mapError(
+      (error) =>
+        new GitHubCliError({
+          operation,
+          detail: error instanceof Error ? `${invalidDetail}: ${error.message}` : invalidDetail,
+          cause: error,
+        }),
+    ),
+  );
 }
 
 const makeGitHubCli = Effect.sync(() => {
@@ -128,20 +100,16 @@ const makeGitHubCli = Effect.sync(() => {
           "number,title,url,baseRefName,headRefName",
         ],
       }).pipe(
-        Effect.map((result) => result.stdout),
+        Effect.map((result) => result.stdout.trim()),
         Effect.flatMap((raw) =>
-          Effect.try({
-            try: () => parseOpenPullRequests(raw),
-            catch: (error: unknown) =>
-              new GitHubCliError({
-                operation: "listOpenPullRequests",
-                detail:
-                  error instanceof Error
-                    ? `GitHub CLI returned invalid PR list JSON: ${error.message}`
-                    : "GitHub CLI returned invalid PR list JSON.",
-                ...(error !== undefined ? { cause: error } : {}),
-              }),
-          }),
+          raw.length === 0
+            ? Effect.succeed([])
+            : decodeGitHubJson(
+                raw,
+                Schema.Array(RawGitHubPullRequestSchema),
+                "listOpenPullRequests",
+                "GitHub CLI returned invalid PR list JSON.",
+              ),
         ),
       ),
     createPullRequest: (input) =>
