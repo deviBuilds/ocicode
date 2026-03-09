@@ -10,6 +10,10 @@ import { isElectron } from "./env";
 import { getRouter } from "./router";
 import { APP_DISPLAY_NAME } from "./branding";
 
+if (isElectron) {
+  document.documentElement.classList.add("electron-vibrancy");
+}
+
 const history = isElectron ? createHashHistory() : createBrowserHistory();
 
 const router = getRouter(history);

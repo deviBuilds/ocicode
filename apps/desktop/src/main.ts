@@ -1149,6 +1149,7 @@ function getIconOption(): { icon: string } | Record<string, never> {
 }
 
 function createWindow(): BrowserWindow {
+  const isMac = process.platform === "darwin";
   const window = new BrowserWindow({
     width: 1100,
     height: 780,
@@ -1160,6 +1161,7 @@ function createWindow(): BrowserWindow {
     title: APP_DISPLAY_NAME,
     titleBarStyle: "hiddenInset",
     trafficLightPosition: { x: 16, y: 18 },
+    ...(isMac ? { vibrancy: "sidebar" } : {}),
     webPreferences: {
       preload: Path.join(__dirname, "preload.js"),
       contextIsolation: true,

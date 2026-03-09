@@ -63,7 +63,6 @@ import {
   SidebarMenuSub,
   SidebarMenuSubButton,
   SidebarMenuSubItem,
-  SidebarSeparator,
   SidebarTrigger,
 } from "./ui/sidebar";
 import { formatWorktreePathForDisplay, getOrphanedWorktreePathForThread } from "../worktreeCleanup";
@@ -200,23 +199,51 @@ function getServerHttpOrigin(): string {
 
 const serverHttpOrigin = getServerHttpOrigin();
 
-function ProjectFavicon({ cwd }: { cwd: string }) {
+/**
+ * Derives a stable muted hue from a project name for the accent bar.
+ */
+function projectAccentColor(name: string): string {
+  let hash = 0;
+  for (let i = 0; i < name.length; i++) {
+    hash = name.charCodeAt(i) + ((hash << 5) - hash);
+  }
+  const hue = ((hash % 360) + 360) % 360;
+  return `oklch(0.65 0.12 ${hue})`;
+}
+
+function ProjectFaviconFallback({ name }: { name: string }) {
+  const letter = name.charAt(0).toUpperCase() || "?";
+  const bg = projectAccentColor(name);
+  return (
+    <span
+      className="flex size-3.5 shrink-0 items-center justify-center rounded-sm text-[9px] font-bold text-white"
+      style={{ backgroundColor: bg }}
+    >
+      {letter}
+    </span>
+  );
+}
+
+function ProjectFavicon({ cwd, name }: { cwd: string; name: string }) {
   const [status, setStatus] = useState<"loading" | "loaded" | "error">("loading");
 
   const src = `${serverHttpOrigin}/api/project-favicon?cwd=${encodeURIComponent(cwd)}`;
 
   if (status === "error") {
-    return <FolderIcon className="size-3.5 shrink-0 text-muted-foreground/50" />;
+    return <ProjectFaviconFallback name={name} />;
   }
 
   return (
-    <img
-      src={src}
-      alt=""
-      className={`size-3.5 shrink-0 rounded-sm object-contain ${status === "loading" ? "hidden" : ""}`}
-      onLoad={() => setStatus("loaded")}
-      onError={() => setStatus("error")}
-    />
+    <>
+      {status === "loading" && <ProjectFaviconFallback name={name} />}
+      <img
+        src={src}
+        alt=""
+        className={`size-3.5 shrink-0 rounded-sm object-contain ${status === "loading" ? "hidden" : ""}`}
+        onLoad={() => setStatus("loaded")}
+        onError={() => setStatus("error")}
+      />
+    </>
   );
 }
 
@@ -1009,7 +1036,7 @@ export default function Sidebar() {
                       aria-label={desktopUpdateTooltip}
                       aria-disabled={desktopUpdateButtonDisabled || undefined}
                       disabled={desktopUpdateButtonDisabled}
-                      className={`inline-flex size-7 ml-auto mt-1.5 items-center justify-center rounded-md text-muted-foreground transition-colors ${desktopUpdateButtonInteractivityClasses} ${desktopUpdateButtonClasses}`}
+                      className={`inline-flex size-7 ml-auto mt-1.5 items-center justify-center rounded-lg text-muted-foreground transition-all duration-150 hover:scale-105 ${desktopUpdateButtonInteractivityClasses} ${desktopUpdateButtonClasses}`}
                       onClick={handleDesktopUpdateButtonClick}
                     >
                       <RocketIcon className="size-3.5" />
@@ -1063,7 +1090,7 @@ export default function Sidebar() {
                     type="button"
                     aria-label="Add project"
                     aria-pressed={shouldShowProjectPathEntry}
-                    className="inline-flex size-5 items-center justify-center rounded-md text-muted-foreground/60 transition-colors hover:bg-accent hover:text-foreground"
+                    className="inline-flex size-5 items-center justify-center rounded-full text-muted-foreground/60 transition-all duration-150 hover:bg-accent hover:text-foreground hover:scale-110"
                     onClick={handleStartAddProject}
                   />
                 }
@@ -1170,12 +1197,15 @@ export default function Sidebar() {
                   }}
                 >
                   <SidebarMenuItem>
-                    <div className="group/project-header relative">
+                    <div
+                      className="group/project-header relative rounded-lg transition-colors duration-150 hover:bg-accent/50"
+                      style={{ borderLeft: `2px solid ${projectAccentColor(project.name)}` }}
+                    >
                       <CollapsibleTrigger
                         render={
                           <SidebarMenuButton
                             size="sm"
-                            className="gap-2 px-2 py-1.5 text-left hover:bg-accent group-hover/project-header:bg-accent group-hover/project-header:text-sidebar-accent-foreground"
+                            className="gap-2 px-2 py-1.5 text-left hover:bg-transparent group-hover/project-header:text-sidebar-accent-foreground"
                           />
                         }
                         onContextMenu={(event) => {
@@ -1191,7 +1221,7 @@ export default function Sidebar() {
                             project.expanded ? "rotate-90" : ""
                           }`}
                         />
-                        <ProjectFavicon cwd={project.cwd} />
+                        <ProjectFavicon cwd={project.cwd} name={project.name} />
                         <span className="flex-1 truncate text-xs font-medium text-foreground/90">
                           {project.name}
                         </span>
@@ -1242,14 +1272,20 @@ export default function Sidebar() {
                           );
 
                           return (
-                            <SidebarMenuSubItem key={thread.id} className="w-full">
+                            <SidebarMenuSubItem key={thread.id} className="w-full relative">
+                              {/* Left-edge status bar (Linear-style) */}
+                              {threadStatus && (
+                                <span
+                                  className={`absolute left-0 top-1 bottom-1 w-0.5 rounded-full ${threadStatus.dotClass} ${threadStatus.pulse ? "animate-pulse" : ""}`}
+                                />
+                              )}
                               <SidebarMenuSubButton
                                 render={<div role="button" tabIndex={0} />}
                                 size="sm"
                                 isActive={isActive}
-                                className={`h-7 w-full translate-x-0 cursor-default justify-start px-2 text-left hover:bg-accent hover:text-foreground ${
+                                className={`h-[30px] w-full translate-x-0 cursor-default justify-start px-2 text-left transition-colors duration-150 hover:bg-accent hover:text-foreground ${
                                   isActive
-                                    ? "bg-accent/85 text-foreground font-medium ring-1 ring-border/70 dark:bg-accent/55 dark:ring-border/50"
+                                    ? "bg-primary/8 text-foreground font-medium shadow-[inset_0_0_0_1px_var(--primary)/12%] dark:bg-primary/10"
                                     : "text-muted-foreground"
                                 }`}
                                 onClick={() => {
@@ -1296,13 +1332,8 @@ export default function Sidebar() {
                                   )}
                                   {threadStatus && (
                                     <span
-                                      className={`inline-flex items-center gap-1 text-[10px] ${threadStatus.colorClass}`}
+                                      className={`inline-flex items-center text-[10px] ${threadStatus.colorClass}`}
                                     >
-                                      <span
-                                        className={`h-1.5 w-1.5 rounded-full ${threadStatus.dotClass} ${
-                                          threadStatus.pulse ? "animate-pulse" : ""
-                                        }`}
-                                      />
                                       <span className="hidden md:inline">{threadStatus.label}</span>
                                     </span>
                                   )}
@@ -1413,7 +1444,7 @@ export default function Sidebar() {
         </SidebarGroup>
       </SidebarContent>
 
-      <SidebarSeparator />
+      <div className="mx-3 h-px bg-gradient-to-r from-transparent via-border to-transparent" />
       <SidebarFooter className="p-2">
         <SidebarMenu>
           <SidebarMenuItem>

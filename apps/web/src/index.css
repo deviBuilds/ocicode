@@ -200,6 +200,7 @@ body,
   overscroll-behavior-y: none;
 }
 
+
 /* Noise texture with subtle radial glow from primary at top */
 body::after {
   content: "";
@@ -308,6 +309,71 @@ label:has(> select#reasoning-effort) select {
   cursor: pointer;
   width: 100%;
   height: 100%;
+}
+
+/* Glass-style sidebar */
+.sidebar-glass {
+  position: relative;
+  background: oklch(0.965 0.002 80);
+  border-right: 1px solid oklch(0 0 0 / 8%);
+}
+
+.dark .sidebar-glass {
+  background: oklch(0.18 0.01 270);
+  border-right: 1px solid oklch(1 0 0 / 7%);
+}
+
+.dark.tint-neutral .sidebar-glass {
+  background: oklch(0.18 0 0);
+}
+
+/* Noise grain overlay for frosted texture */
+.sidebar-glass::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0.05;
+  background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+  background-repeat: repeat;
+  background-size: 200px 200px;
+  z-index: 0;
+}
+
+.sidebar-glass > * {
+  position: relative;
+  z-index: 1;
+}
+
+/* Native vibrancy in Electron — make sidebar transparent so macOS material shows */
+.electron-vibrancy .sidebar-glass {
+  background: transparent !important;
+  border-right: 1px solid oklch(1 0 0 / 6%);
+}
+
+.electron-vibrancy .sidebar-glass::after {
+  display: none;
+}
+
+/* Electron: make root layers transparent for vibrancy pass-through */
+html.electron-vibrancy,
+html.electron-vibrancy body,
+html.electron-vibrancy #root {
+  background: transparent !important;
+}
+
+/* Electron: sidebar wrapper + container must be transparent */
+html.electron-vibrancy [data-slot="sidebar-wrapper"] {
+  background: transparent !important;
+}
+
+html.electron-vibrancy [data-slot="sidebar-container"] {
+  background: transparent !important;
+}
+
+/* Electron: main content stays opaque so vibrancy only shows in sidebar */
+html.electron-vibrancy [data-slot="sidebar-inset"] {
+  background: var(--background);
 }
 
 /* Chat markdown rendering */
