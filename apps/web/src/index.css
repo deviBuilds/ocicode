@@ -29,6 +29,8 @@
   --color-card: var(--card);
   --color-foreground: var(--foreground);
   --color-background: var(--background);
+  --color-surface-elevated: var(--surface-elevated);
+  --color-surface-sunken: var(--surface-sunken);
   --radius-sm: calc(var(--radius) - 4px);
   --radius-md: calc(var(--radius) - 2px);
   --radius-lg: var(--radius);
@@ -36,11 +38,46 @@
   --radius-2xl: calc(var(--radius) + 8px);
   --radius-3xl: calc(var(--radius) + 12px);
   --radius-4xl: calc(var(--radius) + 16px);
+  --shadow-card: 0 1px 3px rgba(0, 0, 0, 0.08);
+  --shadow-card-hover: 0 4px 12px rgba(0, 0, 0, 0.1);
+  --shadow-glow: 0 0 16px -3px var(--primary);
+  --transition-default: 150ms cubic-bezier(0.4, 0, 0.2, 1);
   @keyframes skeleton {
     to {
       background-position: -200% 0;
     }
   }
+  @keyframes fadeIn {
+    from {
+      opacity: 0;
+      transform: translateY(4px);
+    }
+    to {
+      opacity: 1;
+      transform: translateY(0);
+    }
+  }
+  @keyframes scaleIn {
+    from {
+      opacity: 0;
+      transform: scale(0.96);
+    }
+    to {
+      opacity: 1;
+      transform: scale(1);
+    }
+  }
+  @keyframes shimmer {
+    from {
+      background-position: -200% 0;
+    }
+    to {
+      background-position: 200% 0;
+    }
+  }
+  --animate-fade-in: fadeIn 200ms cubic-bezier(0.4, 0, 0.2, 1);
+  --animate-scale-in: scaleIn 200ms cubic-bezier(0.4, 0, 0.2, 1);
+  --animate-shimmer: shimmer 2s linear infinite;
 }
 
 @layer base {
@@ -64,7 +101,7 @@
 :root {
   color-scheme: light;
   --radius: 0.625rem;
-  --background: var(--color-white);
+  --background: oklch(0.985 0.002 80);
   --foreground: var(--color-neutral-800);
   --card: var(--color-white);
   --card-foreground: var(--color-neutral-800);
@@ -76,7 +113,7 @@
   --secondary-foreground: var(--color-neutral-800);
   --muted: --alpha(var(--color-black) / 4%);
   --muted-foreground: color-mix(in srgb, var(--color-neutral-500) 90%, var(--color-black));
-  --accent: --alpha(var(--color-black) / 4%);
+  --accent: --alpha(var(--primary) / 6%);
   --accent-foreground: var(--color-neutral-800);
   --destructive: var(--color-red-500);
   --border: --alpha(var(--color-black) / 8%);
@@ -89,26 +126,31 @@
   --success-foreground: var(--color-emerald-700);
   --warning: var(--color-amber-500);
   --warning-foreground: var(--color-amber-700);
+  --surface-elevated: var(--color-white);
+  --surface-sunken: oklch(0.975 0.002 80);
+  --shadow-card: 0 1px 3px rgba(0, 0, 0, 0.06), 0 0 0 1px rgba(0, 0, 0, 0.03);
+  --shadow-card-hover: 0 4px 12px rgba(0, 0, 0, 0.08), 0 0 0 1px rgba(0, 0, 0, 0.03);
 
   @variant dark {
     color-scheme: dark;
-    --background: color-mix(in srgb, var(--color-neutral-950) 95%, var(--color-white));
+    /* Blue/violet tint (default dark mode) */
+    --background: oklch(0.13 0.008 270);
     --foreground: var(--color-neutral-100);
-    --card: color-mix(in srgb, var(--background) 98%, var(--color-white));
+    --card: oklch(0.155 0.007 270);
     --card-foreground: var(--color-neutral-100);
-    --popover: color-mix(in srgb, var(--background) 98%, var(--color-white));
+    --popover: oklch(0.17 0.006 270);
     --popover-foreground: var(--color-neutral-100);
     --primary: oklch(0.588 0.217 264);
     --primary-foreground: var(--color-white);
-    --secondary: --alpha(var(--color-white) / 4%);
+    --secondary: --alpha(var(--color-white) / 5%);
     --secondary-foreground: var(--color-neutral-100);
-    --muted: --alpha(var(--color-white) / 4%);
-    --muted-foreground: color-mix(in srgb, var(--color-neutral-500) 90%, var(--color-white));
-    --accent: --alpha(var(--color-white) / 4%);
+    --muted: --alpha(var(--color-white) / 5%);
+    --muted-foreground: color-mix(in srgb, var(--color-neutral-400) 90%, var(--color-white));
+    --accent: --alpha(var(--primary) / 8%);
     --accent-foreground: var(--color-neutral-100);
     --destructive: color-mix(in srgb, var(--color-red-500) 90%, var(--color-white));
-    --border: --alpha(var(--color-white) / 6%);
-    --input: --alpha(var(--color-white) / 8%);
+    --border: --alpha(var(--color-white) / 9%);
+    --input: --alpha(var(--color-white) / 10%);
     --ring: oklch(0.588 0.217 264);
     --destructive-foreground: var(--color-red-400);
     --info: var(--color-blue-500);
@@ -117,12 +159,25 @@
     --success-foreground: var(--color-emerald-400);
     --warning: var(--color-amber-500);
     --warning-foreground: var(--color-amber-400);
+    --surface-elevated: oklch(0.185 0.006 270);
+    --surface-sunken: oklch(0.115 0.009 270);
+    --shadow-card: 0 1px 3px rgba(0, 0, 0, 0.3);
+    --shadow-card-hover: 0 4px 12px rgba(0, 0, 0, 0.35);
   }
+}
+
+/* Neutral tint override for dark mode */
+.dark.tint-neutral {
+  --background: oklch(0.13 0 0);
+  --card: oklch(0.155 0 0);
+  --popover: oklch(0.17 0 0);
+  --surface-elevated: oklch(0.185 0 0);
+  --surface-sunken: oklch(0.115 0 0);
 }
 
 body {
   font-family:
-    "DM Sans",
+    "Geist",
     -apple-system,
     BlinkMacSystemFont,
     "Segoe UI",
@@ -145,6 +200,7 @@ body,
   overscroll-behavior-y: none;
 }
 
+/* Noise texture with subtle radial glow from primary at top */
 body::after {
   content: "";
   position: fixed;
@@ -154,6 +210,20 @@ body::after {
   background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
   background-repeat: repeat;
   background-size: 256px 256px;
+}
+
+.dark body::before {
+  content: "";
+  position: fixed;
+  top: 0;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 120%;
+  height: 400px;
+  pointer-events: none;
+  background: radial-gradient(ellipse at top center, var(--primary) 0%, transparent 70%);
+  opacity: 0.02;
+  z-index: 0;
 }
 
 pre,
@@ -178,7 +248,7 @@ input {
 
 /* Scrollbar styling */
 ::-webkit-scrollbar {
-  width: 6px;
+  width: 7px;
 }
 
 ::-webkit-scrollbar-track {
@@ -187,7 +257,8 @@ input {
 
 ::-webkit-scrollbar-thumb {
   background: rgba(0, 0, 0, 0.15);
-  border-radius: 3px;
+  border-radius: 4px;
+  transition: opacity 150ms ease;
 }
 
 ::-webkit-scrollbar-thumb:hover {
@@ -214,15 +285,15 @@ input {
 
 /* Terminal drawer scrollbar parity with chat */
 .thread-terminal-drawer .xterm .xterm-scrollable-element > .scrollbar.vertical {
-  width: 6px !important;
+  width: 7px !important;
 }
 
 .thread-terminal-drawer .xterm .xterm-scrollable-element > .scrollbar > .slider {
-  border-radius: 3px;
+  border-radius: 4px;
 }
 
 .thread-terminal-drawer .xterm .xterm-scrollable-element > .scrollbar.vertical > .slider {
-  width: 6px !important;
+  width: 7px !important;
   left: 0 !important;
 }
 
@@ -323,7 +394,7 @@ label:has(> select#reasoning-effort) select {
   overflow-x: auto;
   border: 1px solid var(--border);
   border-radius: 0.75rem;
-  background: var(--muted);
+  background: var(--surface-sunken);
   padding: 0.8rem 0.9rem;
 }
 
@@ -378,7 +449,7 @@ label:has(> select#reasoning-effort) select {
 }
 
 .chat-markdown .chat-markdown-shiki .shiki {
-  background: color-mix(in srgb, var(--muted) 78%, var(--background)) !important;
+  background: color-mix(in srgb, var(--surface-sunken) 78%, var(--background)) !important;
 }
 
 .chat-markdown table {
@@ -395,7 +466,7 @@ label:has(> select#reasoning-effort) select {
 
 /* Diffs theme bridge (match diff surfaces to app palette) */
 .diff-panel-viewport {
-  background: color-mix(in srgb, var(--background) 94%, var(--card));
+  background: var(--surface-sunken);
 }
 
 .diff-render-file {

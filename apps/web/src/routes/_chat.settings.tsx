@@ -6,6 +6,7 @@ import { getModelOptions, normalizeModelSlug } from "@ocicode/shared/model";
 
 import { MAX_CUSTOM_MODEL_LENGTH, useAppSettings } from "../appSettings";
 import { isElectron } from "../env";
+import { useColorTint, type ColorTint } from "../hooks/useColorTint";
 import { useTheme } from "../hooks/useTheme";
 import { serverConfigQueryOptions } from "../lib/serverReactQuery";
 import { ensureNativeApi } from "../nativeApi";
@@ -32,6 +33,23 @@ const THEME_OPTIONS = [
     description: "Always use the dark theme.",
   },
 ] as const;
+
+const TINT_OPTIONS: Array<{
+  value: ColorTint;
+  label: string;
+  description: string;
+}> = [
+  {
+    value: "violet",
+    label: "Blue / Violet",
+    description: "Tinted dark surfaces with a subtle violet hue.",
+  },
+  {
+    value: "neutral",
+    label: "Neutral Charcoal",
+    description: "Pure neutral dark surfaces with no color bias.",
+  },
+];
 
 const MODEL_PROVIDER_SETTINGS: Array<{
   provider: ProviderKind;
@@ -81,6 +99,7 @@ function patchCustomModels(provider: ProviderKind, models: string[]) {
 
 function SettingsRouteView() {
   const { theme, setTheme, resolvedTheme } = useTheme();
+  const { tint, setTint } = useColorTint();
   const { settings, defaults, updateSettings } = useAppSettings();
   const serverConfigQuery = useQuery(serverConfigQueryOptions());
   const [isOpeningKeybindings, setIsOpeningKeybindings] = useState(false);
@@ -232,6 +251,45 @@ function SettingsRouteView() {
               <p className="mt-4 text-xs text-muted-foreground">
                 Active theme: <span className="font-medium text-foreground">{resolvedTheme}</span>
               </p>
+
+              <div className="mt-5 border-t border-border pt-5">
+                <div className="mb-3">
+                  <h3 className="text-xs font-medium text-foreground">Color Tint</h3>
+                  <p className="mt-1 text-xs text-muted-foreground">
+                    Choose a background tint for dark mode.
+                  </p>
+                </div>
+
+                <div className="space-y-2" role="radiogroup" aria-label="Color tint preference">
+                  {TINT_OPTIONS.map((option) => {
+                    const selected = tint === option.value;
+                    return (
+                      <button
+                        key={option.value}
+                        type="button"
+                        role="radio"
+                        aria-checked={selected}
+                        className={`flex w-full items-start justify-between rounded-lg border px-3 py-2 text-left transition-colors ${
+                          selected
+                            ? "border-primary/60 bg-primary/8 text-foreground"
+                            : "border-border bg-background text-muted-foreground hover:bg-accent"
+                        }`}
+                        onClick={() => setTint(option.value)}
+                      >
+                        <span className="flex flex-col">
+                          <span className="text-sm font-medium">{option.label}</span>
+                          <span className="text-xs">{option.description}</span>
+                        </span>
+                        {selected ? (
+                          <span className="rounded bg-primary/14 px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-primary">
+                            Selected
+                          </span>
+                        ) : null}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
             </section>
 
             <section className="rounded-2xl border border-border bg-card p-5">
