@@ -15,6 +15,7 @@ import {
 import { makeStorageKey } from "@ocicode/shared/branding";
 import { create } from "zustand";
 import { type ChatMessage, type Project, type Thread } from "./types";
+import { Debouncer } from "@tanstack/react-pacer";
 
 // ── State ────────────────────────────────────────────────────────────
 
@@ -68,6 +69,7 @@ function persistState(state: AppState): void {
     // Ignore quota/storage errors to avoid breaking chat UX.
   }
 }
+const debouncedPersistState = new Debouncer(persistState, { wait: 500 });
 
 // ── Pure helpers ──────────────────────────────────────────────────────
 
@@ -382,8 +384,15 @@ export const useStore = create<AppStore>((set) => ({
     set((state) => setThreadBranch(state, threadId, branch, worktreePath)),
 }));
 
-// Persist on every state change
-useStore.subscribe((state) => persistState(state));
+// Persist state changes with debouncing to avoid localStorage thrashing
+useStore.subscribe((state) => debouncedPersistState.maybeExecute(state));
+
+// Flush pending writes synchronously before page unload to prevent data loss.
+if (typeof window !== "undefined") {
+  window.addEventListener("beforeunload", () => {
+    debouncedPersistState.flush();
+  });
+}
 
 export function StoreProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
