@@ -6,7 +6,6 @@ const repoRoot = path.resolve(import.meta.dirname, "..");
 
 const ALLOWED_PATHS = new Set([
   "bun.lock",
-  "apps/marketing/scripts/astro.mjs",
   "scripts/no-telemetry.test.ts",
 ]);
 
