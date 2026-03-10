@@ -34,7 +34,9 @@ function ChatRouteLayout() {
         <ThreadSidebar />
       </Sidebar>
       <DiffWorkerPoolProvider>
-        <Outlet />
+        <div className="flex min-h-0 min-w-0 flex-1 animate-fade-in">
+          <Outlet />
+        </div>
       </DiffWorkerPoolProvider>
     </SidebarProvider>
   );

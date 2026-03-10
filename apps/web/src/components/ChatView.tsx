@@ -3439,7 +3439,7 @@ export default function ChatView({ threadId }: ChatViewProps) {
   }
 
   return (
-    <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-x-hidden bg-background">
+    <div className="flex min-h-0 min-w-0 flex-1 animate-fade-in flex-col overflow-x-hidden bg-background">
       {/* Top bar */}
       <header
         className={cn(
@@ -5437,9 +5437,9 @@ const MessagesTimeline = memo(function MessagesTimeline({
         <div className="py-0.5 pl-1.5">
           <div className="flex items-center gap-2 pt-1 text-[11px] text-muted-foreground/70">
             <span className="inline-flex items-center gap-[3px]">
-              <span className="h-1 w-1 rounded-full bg-muted-foreground/30 animate-pulse" />
-              <span className="h-1 w-1 rounded-full bg-muted-foreground/30 animate-pulse [animation-delay:200ms]" />
-              <span className="h-1 w-1 rounded-full bg-muted-foreground/30 animate-pulse [animation-delay:400ms]" />
+              <span className="h-1 w-1 rounded-full bg-muted-foreground/50 animate-pulse-soft" />
+              <span className="h-1 w-1 rounded-full bg-muted-foreground/50 animate-pulse-soft [animation-delay:200ms]" />
+              <span className="h-1 w-1 rounded-full bg-muted-foreground/50 animate-pulse-soft [animation-delay:400ms]" />
             </span>
             <span>
               {row.createdAt

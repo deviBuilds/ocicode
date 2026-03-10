@@ -893,8 +893,8 @@ export default function Sidebar() {
       : desktopUpdateState?.status === "downloading"
         ? "text-sky-400"
         : shouldHighlightDesktopUpdateError(desktopUpdateState)
-          ? "text-rose-500 animate-pulse"
-          : "text-amber-500 animate-pulse";
+          ? "text-rose-500 animate-pulse-soft"
+          : "text-amber-500 animate-pulse-soft";
   const newThreadShortcutLabel = useMemo(
     () =>
       shortcutLabelForCommand(keybindings, "chat.newLocal") ??
@@ -1248,7 +1248,7 @@ export default function Sidebar() {
                               {/* Left-edge status bar (Linear-style) */}
                               {threadStatus && (
                                 <span
-                                  className={`absolute left-0 top-1 bottom-1 w-0.5 rounded-full ${threadStatus.dotClass} ${threadStatus.pulse ? "animate-pulse" : ""}`}
+                                  className={`absolute left-0 top-1 bottom-1 w-0.5 rounded-full ${threadStatus.dotClass} ${threadStatus.pulse ? "animate-pulse-soft" : ""}`}
                                 />
                               )}
                               <SidebarMenuSubButton
@@ -1355,7 +1355,7 @@ export default function Sidebar() {
                                       className={`inline-flex items-center justify-center ${terminalStatus.colorClass}`}
                                     >
                                       <TerminalIcon
-                                        className={`size-3 ${terminalStatus.pulse ? "animate-pulse" : ""}`}
+                                        className={`size-3 ${terminalStatus.pulse ? "animate-pulse-soft" : ""}`}
                                       />
                                     </span>
                                   )}
