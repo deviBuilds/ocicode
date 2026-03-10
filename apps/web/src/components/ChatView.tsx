@@ -293,6 +293,7 @@ function workToneClass(tone: "thinking" | "tool" | "info" | "error"): string {
 
 
 
+
 interface ExpandedImageItem {
   src: string;
   name: string;
@@ -3432,30 +3433,9 @@ export default function ChatView({ threadId }: ChatViewProps) {
     void onRevertToTurnCount(targetTurnCount);
   };
 
-  // Empty state: no active thread
+  // Empty state: no active thread — delegates to the _chat.index route
   if (!activeThread) {
-    return (
-      <div className="flex min-h-0 min-w-0 flex-1 flex-col bg-background text-muted-foreground/40">
-        {!isElectron && (
-          <header className="border-b border-border px-3 py-2 md:hidden">
-            <div className="flex items-center gap-2">
-              <SidebarTrigger className="size-7 shrink-0" />
-              <span className="text-sm font-medium text-foreground">Threads</span>
-            </div>
-          </header>
-        )}
-        {isElectron && (
-          <div className="drag-region flex h-[52px] shrink-0 items-center border-b border-border px-5">
-            <span className="text-xs text-muted-foreground/50">No active thread</span>
-          </div>
-        )}
-        <div className="flex flex-1 items-center justify-center">
-          <div className="text-center">
-            <p className="text-sm">Select a thread or create a new one to get started.</p>
-          </div>
-        </div>
-      </div>
-    );
+    return null;
   }
 
   return (
@@ -3552,7 +3532,7 @@ export default function ChatView({ threadId }: ChatViewProps) {
           data-chat-composer-form="true"
         >
           <div
-            className={`group rounded-[20px] border bg-card transition-colors duration-200 focus-within:border-ring/45 ${
+            className={`group rounded-[20px] border bg-gradient-to-b from-card to-card/80 shadow-[inset_0_1px_2px_rgba(0,0,0,0.06)] transition-all duration-200 focus-within:border-primary/25 focus-within:shadow-[inset_0_1px_2px_rgba(0,0,0,0.06),var(--shadow-glow)] ${
               isDragOverComposer ? "border-primary/70 bg-accent/30" : "border-border"
             }`}
             onDragEnter={onComposerDragEnter}
@@ -3726,14 +3706,16 @@ export default function ChatView({ threadId }: ChatViewProps) {
                   )}
                 >
                   {/* Provider/model picker */}
-                  <ProviderModelPicker
-                    compact={isComposerFooterCompact}
-                    provider={selectedProvider}
-                    model={selectedModelForPickerWithCustomFallback}
-                    lockedProvider={lockedProvider}
-                    modelOptionsByProvider={modelOptionsByProvider}
-                    onProviderModelChange={onProviderModelSelect}
-                  />
+                  <div className="rounded-full bg-muted/30 px-1">
+                    <ProviderModelPicker
+                      compact={isComposerFooterCompact}
+                      provider={selectedProvider}
+                      model={selectedModelForPickerWithCustomFallback}
+                      lockedProvider={lockedProvider}
+                      modelOptionsByProvider={modelOptionsByProvider}
+                      onProviderModelChange={onProviderModelSelect}
+                    />
+                  </div>
 
                   {isComposerFooterCompact ? (
                     <CompactComposerControlsMenu
@@ -3754,8 +3736,7 @@ export default function ChatView({ threadId }: ChatViewProps) {
                   ) : (
                     <>
                       {selectedProvider === "codex" && selectedEffort != null ? (
-                        <>
-                          <Separator orientation="vertical" className="mx-0.5 hidden h-4 sm:block" />
+                        <div className="hidden items-center rounded-full bg-muted/30 px-1 sm:flex">
                           <CodexTraitsPicker
                             effort={selectedEffort}
                             fastModeEnabled={selectedCodexFastModeEnabled}
@@ -3763,74 +3744,74 @@ export default function ChatView({ threadId }: ChatViewProps) {
                             onEffortChange={onEffortSelect}
                             onFastModeChange={onCodexFastModeChange}
                           />
-                        </>
+                        </div>
                       ) : null}
 
-                      <Separator orientation="vertical" className="mx-0.5 hidden h-4 sm:block" />
+                      <div className="hidden items-center rounded-full bg-muted/30 px-1 sm:flex">
+                        <Button
+                          variant="ghost"
+                          className="shrink-0 whitespace-nowrap px-2 text-muted-foreground/70 hover:text-foreground/80 sm:px-3"
+                          size="sm"
+                          type="button"
+                          onClick={toggleInteractionMode}
+                          title={
+                            interactionMode === "plan"
+                              ? "Plan mode — click to return to normal chat mode"
+                              : "Default mode — click to enter plan mode"
+                          }
+                        >
+                          <BotIcon />
+                          <span className="sr-only sm:not-sr-only">
+                            {interactionMode === "plan" ? "Plan" : "Chat"}
+                          </span>
+                        </Button>
 
-                      <Button
-                        variant="ghost"
-                        className="shrink-0 whitespace-nowrap px-2 text-muted-foreground/70 hover:text-foreground/80 sm:px-3"
-                        size="sm"
-                        type="button"
-                        onClick={toggleInteractionMode}
-                        title={
-                          interactionMode === "plan"
-                            ? "Plan mode — click to return to normal chat mode"
-                            : "Default mode — click to enter plan mode"
-                        }
-                      >
-                        <BotIcon />
-                        <span className="sr-only sm:not-sr-only">
-                          {interactionMode === "plan" ? "Plan" : "Chat"}
-                        </span>
-                      </Button>
+                        <Separator orientation="vertical" className="mx-0.5 h-4" />
 
-                      <Separator orientation="vertical" className="mx-0.5 hidden h-4 sm:block" />
+                        <Button
+                          variant="ghost"
+                          className="shrink-0 whitespace-nowrap px-2 text-muted-foreground/70 hover:text-foreground/80 sm:px-3"
+                          size="sm"
+                          type="button"
+                          onClick={() =>
+                            void handleRuntimeModeChange(
+                              runtimeMode === "full-access" ? "approval-required" : "full-access",
+                            )
+                          }
+                          title={
+                            runtimeMode === "full-access"
+                              ? "Full access — click to require approvals"
+                              : "Approval required — click for full access"
+                          }
+                        >
+                          {runtimeMode === "full-access" ? <LockOpenIcon /> : <LockIcon />}
+                          <span className="sr-only sm:not-sr-only">
+                            {runtimeMode === "full-access" ? "Full access" : "Supervised"}
+                          </span>
+                        </Button>
 
-                      <Button
-                        variant="ghost"
-                        className="shrink-0 whitespace-nowrap px-2 text-muted-foreground/70 hover:text-foreground/80 sm:px-3"
-                        size="sm"
-                        type="button"
-                        onClick={() =>
-                          void handleRuntimeModeChange(
-                            runtimeMode === "full-access" ? "approval-required" : "full-access",
-                          )
-                        }
-                        title={
-                          runtimeMode === "full-access"
-                            ? "Full access — click to require approvals"
-                            : "Approval required — click for full access"
-                        }
-                      >
-                        {runtimeMode === "full-access" ? <LockOpenIcon /> : <LockIcon />}
-                        <span className="sr-only sm:not-sr-only">
-                          {runtimeMode === "full-access" ? "Full access" : "Supervised"}
-                        </span>
-                      </Button>
-
-                      {(activePlan || activeProposedPlan || planSidebarOpen) ? (
-                        <>
-                          <Separator orientation="vertical" className="mx-0.5 hidden h-4 sm:block" />
-                          <Button
-                            variant="ghost"
-                            className={cn(
-                              "shrink-0 whitespace-nowrap px-2 sm:px-3",
-                              planSidebarOpen
-                                ? "text-blue-400 hover:text-blue-300"
-                                : "text-muted-foreground/70 hover:text-foreground/80",
-                            )}
-                            size="sm"
-                            type="button"
-                            onClick={togglePlanSidebar}
-                            title={planSidebarOpen ? "Hide plan sidebar" : "Show plan sidebar"}
-                          >
-                            <ListTodoIcon />
-                            <span className="sr-only sm:not-sr-only">Plan</span>
-                          </Button>
-                        </>
-                      ) : null}
+                        {(activePlan || activeProposedPlan || planSidebarOpen) ? (
+                          <>
+                            <Separator orientation="vertical" className="mx-0.5 h-4" />
+                            <Button
+                              variant="ghost"
+                              className={cn(
+                                "shrink-0 whitespace-nowrap px-2 sm:px-3",
+                                planSidebarOpen
+                                  ? "text-blue-400 hover:text-blue-300"
+                                  : "text-muted-foreground/70 hover:text-foreground/80",
+                              )}
+                              size="sm"
+                              type="button"
+                              onClick={togglePlanSidebar}
+                              title={planSidebarOpen ? "Hide plan sidebar" : "Show plan sidebar"}
+                            >
+                              <ListTodoIcon />
+                              <span className="sr-only sm:not-sr-only">Plan</span>
+                            </Button>
+                          </>
+                        ) : null}
+                      </div>
                     </>
                   )}
                 </div>
@@ -3874,16 +3855,18 @@ export default function ChatView({ threadId }: ChatViewProps) {
                   ) : phase === "running" ? (
                     <button
                       type="button"
-                      className="flex size-8 items-center justify-center rounded-full bg-rose-500/90 text-white transition-all duration-150 hover:bg-rose-500 hover:scale-105 sm:h-8 sm:w-8"
+                      className="relative flex size-8 items-center justify-center rounded-full bg-rose-500/90 text-white transition-all duration-150 hover:bg-rose-500 hover:scale-105 sm:h-8 sm:w-8"
                       onClick={() => void onInterrupt()}
                       aria-label="Stop generation"
                     >
+                      <span className="absolute inset-0 animate-ping rounded-full bg-rose-500/30" />
                       <svg
                         width="12"
                         height="12"
                         viewBox="0 0 12 12"
                         fill="currentColor"
                         aria-hidden="true"
+                        className="relative"
                       >
                         <rect x="2" y="2" width="8" height="8" rx="1.5" />
                       </svg>
@@ -3937,7 +3920,7 @@ export default function ChatView({ threadId }: ChatViewProps) {
                     ) : (
                       <button
                         type="submit"
-                        className="flex h-9 w-9 items-center justify-center rounded-full bg-primary/90 text-primary-foreground transition-all duration-150 hover:bg-primary hover:scale-105 disabled:opacity-30 disabled:hover:scale-100 sm:h-8 sm:w-8"
+                        className="flex h-9 w-9 animate-fade-in items-center justify-center rounded-full bg-primary/90 text-primary-foreground transition-all duration-150 hover:bg-primary hover:scale-105 disabled:opacity-30 disabled:hover:scale-100 sm:h-8 sm:w-8"
                         disabled={
                           isSendBusy ||
                           isConnecting ||
@@ -5358,11 +5341,11 @@ const MessagesTimeline = memo(function MessagesTimeline({
             <>
               {row.showCompletionDivider && (
                 <div className="my-3 flex items-center gap-3">
-                  <span className="h-px flex-1 bg-border" />
-                  <span className="rounded-full border border-border bg-background px-2.5 py-1 text-[10px] uppercase tracking-[0.14em] text-muted-foreground/80">
+                  <span className="h-px flex-1 bg-gradient-to-r from-transparent via-border to-transparent" />
+                  <span className="rounded-full border border-border bg-primary/5 px-2.5 py-1 text-[10px] uppercase tracking-[0.14em] text-muted-foreground/80">
                     {completionSummary ? `Response • ${completionSummary}` : "Response"}
                   </span>
-                  <span className="h-px flex-1 bg-border" />
+                  <span className="h-px flex-1 bg-gradient-to-r from-transparent via-border to-transparent" />
                 </div>
               )}
               <div className="min-w-0 px-1 py-0.5">
@@ -5471,10 +5454,27 @@ const MessagesTimeline = memo(function MessagesTimeline({
 
   if (!hasMessages && !isWorking) {
     return (
-      <div className="flex h-full items-center justify-center">
-        <p className="text-sm text-muted-foreground/30">
-          Send a message to start the conversation.
-        </p>
+      <div className="flex h-full flex-col items-center justify-center gap-5 px-4">
+        <div className="text-center">
+          <h2 className="text-lg font-medium text-foreground/80">
+            What would you like to build?
+          </h2>
+          <p className="mt-1 text-sm text-muted-foreground/40">
+            Describe your task in the composer below.
+          </p>
+        </div>
+        <div className="flex flex-wrap justify-center gap-2">
+          {["Fix a bug", "Add a feature", "Refactor code", "Write tests"].map(
+            (hint) => (
+              <span
+                key={hint}
+                className="rounded-full border border-border/60 px-3 py-1.5 text-xs text-muted-foreground/50"
+              >
+                {hint}
+              </span>
+            ),
+          )}
+        </div>
       </div>
     );
   }

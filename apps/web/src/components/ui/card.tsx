@@ -21,6 +21,22 @@ function Card({ className, render, ...props }: useRender.ComponentProps<"div">) 
   });
 }
 
+function CardGlass({ className, render, ...props }: useRender.ComponentProps<"div">) {
+  const defaultProps = {
+    className: cn(
+      "relative flex flex-col rounded-2xl border border-white/5 bg-card/80 backdrop-blur-sm text-card-foreground shadow-xs/5 before:pointer-events-none before:absolute before:inset-0 before:rounded-[calc(var(--radius-2xl)-1px)]",
+      className,
+    ),
+    "data-slot": "card",
+  };
+
+  return useRender({
+    defaultTagName: "div",
+    props: mergeProps<"div">(defaultProps, props),
+    render,
+  });
+}
+
 function CardFrame({ className, render, ...props }: useRender.ComponentProps<"div">) {
   const defaultProps = {
     className: cn(
@@ -181,6 +197,7 @@ function CardFooter({ className, render, ...props }: useRender.ComponentProps<"d
 
 export {
   Card,
+  CardGlass,
   CardFrame,
   CardFrameHeader,
   CardFrameTitle,
