@@ -1,4 +1,4 @@
-import { memo, useState, useCallback } from "react";
+import { memo, useState, useCallback, useRef, useEffect } from "react";
 import { Badge } from "./ui/badge";
 import { Button } from "./ui/button";
 import { ScrollArea } from "./ui/scroll-area";
@@ -65,6 +65,7 @@ const PlanSidebar = memo(function PlanSidebar({
   const [proposedPlanExpanded, setProposedPlanExpanded] = useState(false);
   const [isSavingToWorkspace, setIsSavingToWorkspace] = useState(false);
   const [copied, setCopied] = useState(false);
+  const copiedTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const planMarkdown = activeProposedPlan?.planMarkdown ?? null;
   const planTitle = planMarkdown ? proposedPlanTitle(planMarkdown) : null;
@@ -72,8 +73,15 @@ const PlanSidebar = memo(function PlanSidebar({
   const handleCopyPlan = useCallback(() => {
     if (!planMarkdown) return;
     void navigator.clipboard.writeText(planMarkdown);
+    if (copiedTimerRef.current != null) {
+      clearTimeout(copiedTimerRef.current);
+    }
+
     setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
+    copiedTimerRef.current = setTimeout(() => {
+      setCopied(false);
+      copiedTimerRef.current = null;
+    }, 2000);
   }, [planMarkdown]);
 
   const handleDownload = useCallback(() => {
@@ -119,6 +127,14 @@ const PlanSidebar = memo(function PlanSidebar({
       {/* Header */}
       <div className="flex h-12 shrink-0 items-center justify-between border-b border-border/60 px-3">
         <div className="flex items-center gap-2">
+  // Cleanup timeout on unmount
+  useEffect(() => {
+    return () => {
+      if (copiedTimerRef.current \!= null) {
+        clearTimeout(copiedTimerRef.current);
+      }
+    };
+  }, []);
           <Badge
             variant="secondary"
             className="rounded-md bg-blue-500/10 px-1.5 py-0 text-[10px] font-semibold tracking-wide text-blue-400 uppercase"
