@@ -13,13 +13,22 @@ function emitChange() {
   for (const listener of listeners) listener();
 }
 
-function getStored(): ColorTint {
-  const raw = localStorage.getItem(STORAGE_KEY);
+export function resolveStoredColorTint(raw: string | null): ColorTint {
   if (raw && VALID_TINTS.has(raw)) return raw as ColorTint;
-  return "violet";
+  return "neutral";
+}
+
+function getStored(): ColorTint {
+  if (typeof localStorage === "undefined") {
+    return "neutral";
+  }
+  return resolveStoredColorTint(localStorage.getItem(STORAGE_KEY));
 }
 
 function applyTint(tint: ColorTint) {
+  if (typeof document === "undefined") {
+    return;
+  }
   const root = document.documentElement;
   root.classList.remove("tint-violet", "tint-neutral");
   root.classList.add(`tint-${tint}`);

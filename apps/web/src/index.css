@@ -129,6 +129,9 @@
   color-scheme: light;
   --radius: 0.625rem;
   --background: oklch(0.985 0.002 80);
+  --chat-pane-background: var(--background);
+  --chat-composer-background: var(--card);
+  --chat-code-block-background: var(--surface-sunken);
   --foreground: var(--color-neutral-800);
   --card: var(--color-white);
   --card-foreground: var(--color-neutral-800);
@@ -160,14 +163,16 @@
 
   @variant dark {
     color-scheme: dark;
-    /* Blue/violet tint (default dark mode) */
-    --background: oklch(0.13 0.008 270);
+    --background: oklch(0.15 0.002 285);
+    --chat-pane-background: #181818;
+    --chat-composer-background: #1c1c1c;
+    --chat-code-block-background: #2a2a2a;
     --foreground: var(--color-neutral-100);
-    --card: oklch(0.155 0.007 270);
+    --card: oklch(0.185 0.002 285);
     --card-foreground: var(--color-neutral-100);
-    --popover: oklch(0.17 0.006 270);
+    --popover: oklch(0.205 0.002 285);
     --popover-foreground: var(--color-neutral-100);
-    --primary: oklch(0.588 0.217 264);
+    --primary: oklch(0.72 0.16 63);
     --primary-foreground: var(--color-white);
     --secondary: --alpha(var(--color-white) / 5%);
     --secondary-foreground: var(--color-neutral-100);
@@ -178,7 +183,7 @@
     --destructive: color-mix(in srgb, var(--color-red-500) 90%, var(--color-white));
     --border: --alpha(var(--color-white) / 9%);
     --input: --alpha(var(--color-white) / 10%);
-    --ring: oklch(0.588 0.217 264);
+    --ring: oklch(0.72 0.16 63);
     --destructive-foreground: var(--color-red-400);
     --info: var(--color-blue-500);
     --info-foreground: var(--color-blue-400);
@@ -186,24 +191,38 @@
     --success-foreground: var(--color-emerald-400);
     --warning: var(--color-amber-500);
     --warning-foreground: var(--color-amber-400);
-    --surface-elevated: oklch(0.185 0.006 270);
-    --surface-sunken: oklch(0.115 0.009 270);
+    --surface-elevated: oklch(0.205 0.002 285);
+    --surface-sunken: oklch(0.13 0.002 285);
     --shadow-card: 0 1px 3px rgba(0, 0, 0, 0.3);
     --shadow-card-hover: 0 4px 12px rgba(0, 0, 0, 0.35);
   }
 }
 
-/* Neutral tint override for dark mode */
+/* Explicit neutral alias for stored preferences */
 .dark.tint-neutral {
-  --background: oklch(0.13 0 0);
-  --card: oklch(0.155 0 0);
-  --popover: oklch(0.17 0 0);
-  --surface-elevated: oklch(0.185 0 0);
-  --surface-sunken: oklch(0.115 0 0);
+  --background: oklch(0.15 0.002 285);
+  --card: oklch(0.185 0.002 285);
+  --popover: oklch(0.205 0.002 285);
+  --primary: oklch(0.72 0.16 63);
+  --ring: oklch(0.72 0.16 63);
+  --surface-elevated: oklch(0.205 0.002 285);
+  --surface-sunken: oklch(0.13 0.002 285);
+}
+
+.dark.tint-violet {
+  --background: oklch(0.13 0.008 270);
+  --card: oklch(0.155 0.007 270);
+  --popover: oklch(0.17 0.006 270);
+  --primary: oklch(0.588 0.217 264);
+  --ring: oklch(0.588 0.217 264);
+  --surface-elevated: oklch(0.185 0.006 270);
+  --surface-sunken: oklch(0.115 0.009 270);
 }
 
 body {
   font-family:
+    "SF Pro Text",
+    "SF Pro Display",
     "Geist",
     -apple-system,
     BlinkMacSystemFont,
@@ -234,7 +253,7 @@ body::after {
   position: fixed;
   inset: 0;
   pointer-events: none;
-  opacity: 0.035;
+  opacity: 0.024;
   background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
   background-repeat: repeat;
   background-size: 256px 256px;
@@ -249,8 +268,12 @@ body::after {
   width: 120%;
   height: 400px;
   pointer-events: none;
-  background: radial-gradient(ellipse at top center, var(--primary) 0%, transparent 70%);
-  opacity: 0.02;
+  background: radial-gradient(
+    ellipse at top center,
+    color-mix(in srgb, var(--foreground) 14%, transparent) 0%,
+    transparent 72%
+  );
+  opacity: 0.1;
   z-index: 0;
 }
 
@@ -341,17 +364,13 @@ label:has(> select#reasoning-effort) select {
 /* Glass-style sidebar */
 .sidebar-glass {
   position: relative;
-  background: oklch(0.965 0.002 80);
-  border-right: 1px solid oklch(0 0 0 / 8%);
+  background: color-mix(in srgb, var(--surface-elevated) 92%, transparent);
+  border-right: 1px solid color-mix(in srgb, var(--border) 88%, transparent);
 }
 
 .dark .sidebar-glass {
-  background: oklch(0.18 0.01 270);
-  border-right: 1px solid oklch(1 0 0 / 7%);
-}
-
-.dark.tint-neutral .sidebar-glass {
-  background: oklch(0.18 0 0);
+  background: color-mix(in srgb, var(--surface-elevated) 84%, transparent);
+  border-right: 1px solid color-mix(in srgb, var(--border) 92%, transparent);
 }
 
 /* Noise grain overlay for frosted texture */
@@ -360,7 +379,7 @@ label:has(> select#reasoning-effort) select {
   position: absolute;
   inset: 0;
   pointer-events: none;
-  opacity: 0.05;
+  opacity: 0.03;
   background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
   background-repeat: repeat;
   background-size: 200px 200px;
@@ -400,7 +419,35 @@ html.electron-vibrancy [data-slot="sidebar-container"] {
 
 /* Electron: main content stays opaque so vibrancy only shows in sidebar */
 html.electron-vibrancy [data-slot="sidebar-inset"] {
-  background: var(--background);
+  background: var(--chat-pane-background);
+}
+
+html.electron-vibrancy .branch-selector-pill {
+  background: rgb(40 40 40 / 0.42) !important;
+  -webkit-backdrop-filter: blur(22px) saturate(170%);
+  backdrop-filter: blur(22px) saturate(170%);
+}
+
+html.electron-vibrancy .branch-selector-popover {
+  background: rgb(36 36 36 / 0.46) !important;
+  -webkit-backdrop-filter: blur(30px) saturate(180%);
+  backdrop-filter: blur(30px) saturate(180%);
+}
+
+.chat-shell-surface {
+  background: var(--chat-pane-background);
+}
+
+.chat-composer-surface {
+  background: var(--chat-composer-background);
+}
+
+.chat-composer-drag-over {
+  background: color-mix(in srgb, var(--chat-composer-background) 78%, var(--accent));
+}
+
+.chat-code-block-surface {
+  background: var(--chat-code-block-background);
 }
 
 /* Chat markdown rendering */
@@ -487,7 +534,7 @@ html.electron-vibrancy [data-slot="sidebar-inset"] {
   overflow-x: auto;
   border: 1px solid var(--border);
   border-radius: 0.75rem;
-  background: var(--surface-sunken);
+  background: var(--chat-code-block-background);
   padding: 0.8rem 0.9rem;
 }
 
@@ -543,7 +590,7 @@ html.electron-vibrancy [data-slot="sidebar-inset"] {
 }
 
 .chat-markdown .chat-markdown-shiki .shiki {
-  background: color-mix(in srgb, var(--surface-sunken) 78%, var(--background)) !important;
+  background: var(--chat-code-block-background) !important;
 }
 
 .chat-markdown table {

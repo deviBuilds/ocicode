@@ -32,6 +32,7 @@ import {
 } from "@ocicode/shared/model";
 import {
   memo,
+  type ReactNode,
   useCallback,
   useEffect,
   useLayoutEffect,
@@ -54,6 +55,7 @@ import { serverConfigQueryOptions, serverQueryKeys } from "~/lib/serverReactQuer
 
 import { isElectron } from "../env";
 import { parseDiffRouteSearch, stripDiffSearchParams } from "../diffRouteSearch";
+import { CHAT_COMPOSER_MAX_WIDTH } from "../chatShellLayout";
 import {
   type ComposerSlashCommand,
   type ComposerTrigger,
@@ -117,7 +119,7 @@ import {
   summarizeTurnDiffStats,
   type TurnDiffTreeNode,
 } from "../lib/turnDiffTree";
-import BranchToolbar from "./BranchToolbar";
+import ChatStatusBar from "./BranchToolbar";
 import GitActionsControl from "./GitActionsControl";
 import {
   isOpenFavoriteEditorShortcut,
@@ -129,6 +131,7 @@ import PlanSidebar from "./PlanSidebar";
 import ThreadTerminalDrawer from "./ThreadTerminalDrawer";
 import { Alert, AlertAction, AlertDescription, AlertTitle } from "./ui/alert";
 import {
+  BrainIcon,
   BotIcon,
   ChevronDownIcon,
   ChevronLeftIcon,
@@ -140,14 +143,13 @@ import {
   EllipsisIcon,
   FolderClosedIcon,
   ListTodoIcon,
-  LockIcon,
-  LockOpenIcon,
-  Undo2Icon,
+  SquarePenIcon,
   XIcon,
   CopyIcon,
   CheckIcon,
 } from "lucide-react";
 import { Button } from "./ui/button";
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "./ui/collapsible";
 import { Input } from "./ui/input";
 import { Separator } from "./ui/separator";
 import { Group, GroupSeparator } from "./ui/group";
@@ -168,10 +170,8 @@ import {
 import {
   ClaudeAI,
   CursorIcon,
-  Gemini,
   Icon,
   OpenAI,
-  OpenCodeIcon,
   VisualStudioCode,
   Zed,
 } from "./Icons";
@@ -251,7 +251,6 @@ function formatWorkingTimer(startIso: string, endIso: string): string | null {
 
 const LAST_EDITOR_KEY = makeStorageKey("last-editor");
 const LAST_INVOKED_SCRIPT_BY_PROJECT_KEY = makeStorageKey("last-invoked-script-by-project");
-const MAX_VISIBLE_WORK_LOG_ENTRIES = 6;
 const ALWAYS_UNVIRTUALIZED_TAIL_ROWS = 8;
 const ATTACHMENT_PREVIEW_HANDOFF_TTL_MS = 5000;
 const IMAGE_SIZE_LIMIT_LABEL = `${Math.round(PROVIDER_SEND_TURN_MAX_IMAGE_BYTES / (1024 * 1024))}MB`;
@@ -1675,11 +1674,6 @@ export default function ChatView({ threadId }: ChatViewProps) {
   const toggleInteractionMode = useCallback(() => {
     handleInteractionModeChange(interactionMode === "plan" ? "default" : "plan");
   }, [handleInteractionModeChange, interactionMode]);
-  const toggleRuntimeMode = useCallback(() => {
-    void handleRuntimeModeChange(
-      runtimeMode === "full-access" ? "approval-required" : "full-access",
-    );
-  }, [handleRuntimeModeChange, runtimeMode]);
   const togglePlanSidebar = useCallback(() => {
     setPlanSidebarOpen((open) => {
       if (open) {
@@ -3439,14 +3433,8 @@ export default function ChatView({ threadId }: ChatViewProps) {
   }
 
   return (
-    <div className="flex min-h-0 min-w-0 flex-1 animate-fade-in flex-col overflow-x-hidden bg-background">
-      {/* Top bar */}
-      <header
-        className={cn(
-          "border-b border-border px-3 sm:px-5",
-          isElectron ? "drag-region flex h-[52px] items-center" : "py-2 sm:py-3",
-        )}
-      >
+    <div className="chat-shell-surface flex min-h-0 min-w-0 flex-1 animate-fade-in flex-col overflow-hidden">
+      <ChatTopBar>
         <ChatHeader
           activeThreadId={activeThread.id}
           activeThreadTitle={activeThread.title}
@@ -3470,7 +3458,7 @@ export default function ChatView({ threadId }: ChatViewProps) {
           onDeleteProjectScript={deleteProjectScript}
           onToggleDiff={onToggleDiff}
         />
-      </header>
+      </ChatTopBar>
 
       {/* Error banner */}
       <ProviderHealthBanner status={activeProviderStatus} />
@@ -3479,14 +3467,17 @@ export default function ChatView({ threadId }: ChatViewProps) {
         onDismiss={() => setThreadError(activeThread.id, null)}
       />
       {/* Main content area with optional plan sidebar */}
-      <div className="flex min-h-0 min-w-0 flex-1">
+      <div className="chat-shell-surface flex min-h-0 min-w-0 flex-1">
         {/* Chat column */}
-        <div className="flex min-h-0 min-w-0 flex-1 flex-col">
+        <div
+          data-chat-shell-center-column="true"
+          className="relative flex min-h-0 min-w-0 flex-1 flex-col"
+        >
 
       {/* Messages */}
       <div
         ref={setMessagesScrollContainerRef}
-        className="min-h-0 flex-1 overflow-x-hidden overflow-y-auto overscroll-y-contain px-3 py-3 sm:px-5 sm:py-4"
+        className="min-h-0 flex-1 overflow-x-hidden overflow-y-auto overscroll-y-contain px-4 py-5 sm:px-6 sm:py-6"
         onScroll={onMessagesScroll}
         onClickCapture={onMessagesClickCapture}
         onWheel={onMessagesWheel}
@@ -3524,16 +3515,19 @@ export default function ChatView({ threadId }: ChatViewProps) {
       </div>
 
       {/* Input bar */}
-      <div className={cn("px-3 pt-1.5 sm:px-5 sm:pt-2", isGitRepo ? "pb-1" : "pb-3 sm:pb-4")}>
+      <ChatComposerDock isGitRepo={isGitRepo}>
         <form
           ref={composerFormRef}
           onSubmit={onSend}
-          className="mx-auto w-full min-w-0 max-w-3xl"
+          className="mx-auto w-full min-w-0"
+          style={{ maxWidth: CHAT_COMPOSER_MAX_WIDTH }}
           data-chat-composer-form="true"
         >
           <div
-            className={`group rounded-[20px] border bg-gradient-to-b from-card to-card/80 shadow-[inset_0_1px_2px_rgba(0,0,0,0.06)] transition-all duration-200 focus-within:border-primary/25 focus-within:shadow-[inset_0_1px_2px_rgba(0,0,0,0.06),var(--shadow-glow)] ${
-              isDragOverComposer ? "border-primary/70 bg-accent/30" : "border-border"
+            className={`chat-composer-surface group rounded-[24px] border transition-all duration-200 ${
+              isDragOverComposer
+                ? "chat-composer-drag-over border-primary/55 shadow-[0_16px_30px_rgba(0,0,0,0.18)]"
+                : "border-border/75 shadow-[0_12px_28px_rgba(0,0,0,0.12)]"
             }`}
             onDragEnter={onComposerDragEnter}
             onDragOver={onComposerDragOver}
@@ -3722,7 +3716,6 @@ export default function ChatView({ threadId }: ChatViewProps) {
                       activePlan={Boolean(activePlan || activeProposedPlan || planSidebarOpen)}
                       interactionMode={interactionMode}
                       planSidebarOpen={planSidebarOpen}
-                      runtimeMode={runtimeMode}
                       selectedEffort={selectedEffort}
                       selectedProvider={selectedProvider}
                       selectedCodexFastModeEnabled={selectedCodexFastModeEnabled}
@@ -3731,7 +3724,6 @@ export default function ChatView({ threadId }: ChatViewProps) {
                       onCodexFastModeChange={onCodexFastModeChange}
                       onToggleInteractionMode={toggleInteractionMode}
                       onTogglePlanSidebar={togglePlanSidebar}
-                      onToggleRuntimeMode={toggleRuntimeMode}
                     />
                   ) : (
                     <>
@@ -3756,37 +3748,13 @@ export default function ChatView({ threadId }: ChatViewProps) {
                           onClick={toggleInteractionMode}
                           title={
                             interactionMode === "plan"
-                              ? "Plan mode — click to return to normal chat mode"
-                              : "Default mode — click to enter plan mode"
+                              ? "Plan mode — click to return to agent mode"
+                              : "Agent mode — click to enter plan mode"
                           }
                         >
-                          <BotIcon />
+                          {interactionMode === "plan" ? <ListTodoIcon /> : <BotIcon />}
                           <span className="sr-only sm:not-sr-only">
-                            {interactionMode === "plan" ? "Plan" : "Chat"}
-                          </span>
-                        </Button>
-
-                        <Separator orientation="vertical" className="mx-0.5 h-4" />
-
-                        <Button
-                          variant="ghost"
-                          className="shrink-0 whitespace-nowrap px-2 text-muted-foreground/70 hover:text-foreground/80 sm:px-3"
-                          size="sm"
-                          type="button"
-                          onClick={() =>
-                            void handleRuntimeModeChange(
-                              runtimeMode === "full-access" ? "approval-required" : "full-access",
-                            )
-                          }
-                          title={
-                            runtimeMode === "full-access"
-                              ? "Full access — click to require approvals"
-                              : "Approval required — click for full access"
-                          }
-                        >
-                          {runtimeMode === "full-access" ? <LockOpenIcon /> : <LockIcon />}
-                          <span className="sr-only sm:not-sr-only">
-                            {runtimeMode === "full-access" ? "Full access" : "Supervised"}
+                            {interactionMode === "plan" ? "Plan" : "Agent"}
                           </span>
                         </Button>
 
@@ -3980,16 +3948,17 @@ export default function ChatView({ threadId }: ChatViewProps) {
             )}
           </div>
         </form>
-      </div>
+      </ChatComposerDock>
 
-      {isGitRepo && (
-        <BranchToolbar
-          threadId={activeThread.id}
-          onEnvModeChange={onEnvModeChange}
-          envLocked={envLocked}
-          onComposerFocusRequest={scheduleComposerFocus}
-        />
-      )}
+      <ChatStatusBar
+        threadId={activeThread.id}
+        onEnvModeChange={onEnvModeChange}
+        envLocked={envLocked}
+        isGitRepo={isGitRepo}
+        runtimeMode={runtimeMode}
+        onRuntimeModeChange={handleRuntimeModeChange}
+        onComposerFocusRequest={scheduleComposerFocus}
+      />
 
         </div>{/* end chat column */}
 
@@ -4151,27 +4120,33 @@ const ChatHeader = memo(function ChatHeader({
   onToggleDiff,
 }: ChatHeaderProps) {
   return (
-    <div className="flex min-w-0 flex-1 items-center gap-2">
+    <div className="flex min-w-0 flex-1 items-center gap-3">
       <div className="flex min-w-0 flex-1 items-center gap-2 overflow-hidden sm:gap-3">
         <SidebarTrigger className="size-7 shrink-0 md:hidden" />
         <h2
-          className="min-w-0 shrink truncate text-sm font-medium text-foreground"
+          className="min-w-0 shrink truncate text-[13px] font-semibold tracking-tight text-foreground/92"
           title={activeThreadTitle}
         >
           {activeThreadTitle}
         </h2>
         {activeProjectName && (
-          <Badge variant="outline" className="max-w-28 shrink-0 truncate">
+          <Badge
+            variant="outline"
+            className="max-w-28 shrink-0 rounded-full border-border/70 bg-background/70 px-2.5"
+          >
             {activeProjectName}
           </Badge>
         )}
         {activeProjectName && !isGitRepo && (
-          <Badge variant="outline" className="shrink-0 text-[10px] text-amber-700">
+          <Badge
+            variant="outline"
+            className="shrink-0 rounded-full border-amber-500/25 bg-amber-500/10 text-[10px] text-amber-500"
+          >
             No Git
           </Badge>
         )}
       </div>
-      <div className="@container/header-actions flex min-w-0 flex-1 items-center justify-end gap-2 @sm/header-actions:gap-3">
+      <div className="@container/header-actions flex min-w-0 flex-1 items-center justify-end gap-2 @sm/header-actions:gap-2.5">
         {activeProjectScripts && (
           <ProjectScriptsControl
             scripts={activeProjectScripts}
@@ -4220,6 +4195,38 @@ const ChatHeader = memo(function ChatHeader({
   );
 });
 
+const ChatTopBar = memo(function ChatTopBar({ children }: { children: ReactNode }) {
+  return (
+    <header
+      className={cn(
+        "chat-shell-surface border-b border-border/70 px-4 sm:px-6",
+        isElectron ? "drag-region flex h-[52px] items-center" : "py-3",
+      )}
+    >
+      {children}
+    </header>
+  );
+});
+
+const ChatComposerDock = memo(function ChatComposerDock({
+  children,
+  isGitRepo,
+}: {
+  children: ReactNode;
+  isGitRepo: boolean;
+}) {
+  return (
+    <div
+      className={cn(
+        "chat-shell-surface px-4 pt-3 sm:px-6",
+        isGitRepo ? "pb-2" : "pb-4",
+      )}
+    >
+      {children}
+    </div>
+  );
+});
+
 const ThreadErrorBanner = memo(function ThreadErrorBanner({
   error,
   onDismiss,
@@ -4229,7 +4236,7 @@ const ThreadErrorBanner = memo(function ThreadErrorBanner({
 }) {
   if (!error) return null;
   return (
-    <div className="pt-3 mx-auto max-w-3xl">
+    <div className="mx-auto max-w-[57.5rem] px-4 pt-4 sm:px-6">
       <Alert variant="error">
         <CircleAlertIcon />
         <AlertDescription className="line-clamp-3" title={error}>
@@ -4267,7 +4274,7 @@ const ProviderHealthBanner = memo(function ProviderHealthBanner({
       : `${status.provider} provider has limited availability.`;
 
   return (
-    <div className="pt-3 mx-auto max-w-3xl">
+    <div className="mx-auto max-w-[57.5rem] px-4 pt-4 sm:px-6">
       <Alert variant={status.status === "error" ? "error" : "warning"}>
         <CircleAlertIcon />
         <AlertTitle>
@@ -4300,7 +4307,9 @@ const ComposerPendingApprovalPanel = memo(function ComposerPendingApprovalPanel(
   return (
     <div className="px-4 py-3.5 sm:px-5 sm:py-4">
       <div className="flex flex-wrap items-center gap-2">
-        <span className="uppercase text-sm tracking-[0.2em]">PENDING APPROVAL</span>
+        <span className="text-sm font-medium tracking-[0.04em] text-muted-foreground/78">
+          Pending approval
+        </span>
         <span className="text-sm font-medium">{approvalSummary}</span>
         {pendingCount > 1 ? (
           <span className="text-xs text-muted-foreground">1/{pendingCount}</span>
@@ -4485,7 +4494,7 @@ const ComposerPendingUserInputCard = memo(function ComposerPendingUserInputCard(
               {questionIndex + 1}/{prompt.questions.length}
             </span>
           ) : null}
-          <span className="text-[11px] font-semibold tracking-widest text-muted-foreground/50 uppercase">
+          <span className="text-[11px] font-semibold tracking-[0.04em] text-muted-foreground/56">
             {activeQuestion.header}
           </span>
         </div>
@@ -4546,7 +4555,9 @@ const ComposerPlanFollowUpBanner = memo(function ComposerPlanFollowUpBanner({
   return (
     <div className="px-4 py-3.5 sm:px-5 sm:py-4">
       <div className="flex flex-wrap items-center gap-2">
-        <span className="uppercase text-sm tracking-[0.2em]">Plan ready</span>
+        <span className="text-sm font-medium tracking-[0.04em] text-muted-foreground/78">
+          Plan ready
+        </span>
         {planTitle ? (
           <span className="min-w-0 flex-1 truncate text-sm font-medium">{planTitle}</span>
         ) : null}
@@ -4558,7 +4569,15 @@ const ComposerPlanFollowUpBanner = memo(function ComposerPlanFollowUpBanner({
   );
 });
 
-const MessageCopyButton = memo(function MessageCopyButton({ text }: { text: string }) {
+const MessageCopyButton = memo(function MessageCopyButton({
+  text,
+  iconOnly = false,
+  className,
+}: {
+  text: string;
+  iconOnly?: boolean;
+  className?: string;
+}) {
   const [copied, setCopied] = useState(false);
 
   const handleCopy = useCallback(() => {
@@ -4568,7 +4587,15 @@ const MessageCopyButton = memo(function MessageCopyButton({ text }: { text: stri
   }, [text]);
 
   return (
-    <Button type="button" size="xs" variant="outline" onClick={handleCopy} title="Copy message">
+    <Button
+      type="button"
+      size={iconOnly ? "icon-sm" : "xs"}
+      variant={iconOnly ? "ghost" : "outline"}
+      className={cn(iconOnly && "rounded-full", className)}
+      onClick={handleCopy}
+      title={copied ? "Copied" : "Copy message"}
+      aria-label={copied ? "Copied" : "Copy message"}
+    >
       {copied ? <CheckIcon className="size-3 text-success" /> : <CopyIcon className="size-3" />}
     </Button>
   );
@@ -5178,14 +5205,8 @@ const MessagesTimeline = memo(function MessagesTimeline({
         (() => {
           const groupId = row.id;
           const groupedEntries = row.groupedEntries;
-          const isExpanded = expandedWorkGroups[groupId] ?? false;
-          const hasOverflow = groupedEntries.length > MAX_VISIBLE_WORK_LOG_ENTRIES;
-          const visibleEntries =
-            hasOverflow && !isExpanded
-              ? groupedEntries.slice(-MAX_VISIBLE_WORK_LOG_ENTRIES)
-              : groupedEntries;
-          const hiddenCount = groupedEntries.length - visibleEntries.length;
           const onlyToolEntries = groupedEntries.every((entry) => entry.tone === "tool");
+          const isExpanded = expandedWorkGroups[groupId] ?? !onlyToolEntries;
           const groupLabel = onlyToolEntries
             ? groupedEntries.length === 1
               ? "Tool call"
@@ -5193,68 +5214,89 @@ const MessagesTimeline = memo(function MessagesTimeline({
             : groupedEntries.length === 1
               ? "Work event"
               : `Work log (${groupedEntries.length})`;
+          const latestEntry = groupedEntries[groupedEntries.length - 1] ?? null;
+          const collapseSummary = isExpanded
+            ? `${groupedEntries.length} ${groupedEntries.length === 1 ? "entry" : "entries"}`
+            : latestEntry?.label ?? null;
 
           return (
-            <div className="rounded-lg border border-border/80 bg-card/45 px-3 py-2">
-              <div className="mb-1.5 flex items-center justify-between gap-3">
-                <p className="text-[10px] uppercase tracking-[0.12em] text-muted-foreground/65">
-                  {groupLabel}
-                </p>
-                {hasOverflow && (
-                  <button
-                    type="button"
-                    className="text-[10px] uppercase tracking-[0.12em] text-muted-foreground/55 transition-colors duration-150 hover:text-muted-foreground/80"
-                    onClick={() => onToggleWorkGroup(groupId)}
-                  >
-                    {isExpanded ? "Show less" : `Show ${hiddenCount} more`}
-                  </button>
-                )}
-              </div>
-              <div className="space-y-1">
-                {visibleEntries.map((workEntry) => (
-                  <div key={`work-row:${workEntry.id}`} className="flex items-start gap-2 py-0.5">
-                    <span className="mt-[7px] h-1.5 w-1.5 shrink-0 rounded-full bg-muted-foreground/30" />
-                    <div className="min-w-0 flex-1 py-[2px]">
-                      <p className={`text-[11px] leading-relaxed ${workToneClass(workEntry.tone)}`}>
-                        {workEntry.label}
-                      </p>
-                      {workEntry.command && (
-                        <pre className="mt-1 overflow-x-auto rounded-md border border-border/70 bg-background/80 px-2 py-1 font-mono text-[11px] leading-relaxed text-foreground/80">
-                          {workEntry.command}
-                        </pre>
-                      )}
-                      {workEntry.changedFiles && workEntry.changedFiles.length > 0 && (
-                        <div className="mt-1 flex flex-wrap gap-1">
-                          {workEntry.changedFiles.slice(0, 6).map((filePath) => (
-                            <span
-                              key={`${workEntry.id}:${filePath}`}
-                              className="rounded-md border border-border/70 bg-background/65 px-1.5 py-0.5 font-mono text-[10px] text-muted-foreground/85"
-                              title={filePath}
-                            >
-                              {filePath}
-                            </span>
-                          ))}
-                          {workEntry.changedFiles.length > 6 && (
-                            <span className="px-1 text-[10px] text-muted-foreground/65">
-                              +{workEntry.changedFiles.length - 6} more
-                            </span>
-                          )}
-                        </div>
-                      )}
-                      {workEntry.detail &&
-                        (!workEntry.command || workEntry.detail !== workEntry.command) && (
-                          <p
-                            className="mt-1 text-[11px] leading-relaxed text-muted-foreground/75"
-                            title={workEntry.detail}
-                          >
-                            {workEntry.detail}
-                          </p>
+            <Collapsible
+              open={isExpanded}
+              onOpenChange={() => onToggleWorkGroup(groupId)}
+              className="w-full rounded-[22px] border border-border/70 bg-card/42 shadow-xs/5"
+            >
+              <CollapsibleTrigger className="flex w-full items-center justify-between gap-4 px-4 py-3 text-left">
+                <div className="min-w-0">
+                  <p className="text-[10px] font-medium tracking-[0.04em] text-muted-foreground/62">
+                    {groupLabel}
+                  </p>
+                  {collapseSummary ? (
+                    <p className="mt-1 truncate text-[12px] leading-relaxed text-foreground/78">
+                      {collapseSummary}
+                    </p>
+                  ) : null}
+                </div>
+                <div className="flex shrink-0 items-center gap-2 text-muted-foreground/58">
+                  {!isExpanded ? (
+                    <span className="rounded-full border border-border/70 bg-background/55 px-2 py-1 text-[10px] font-medium tracking-[0.04em] text-muted-foreground/76">
+                      Expand
+                    </span>
+                  ) : null}
+                  <ChevronRightIcon
+                    className={cn(
+                      "size-4 transition-transform duration-200",
+                      isExpanded && "rotate-90",
+                    )}
+                  />
+                </div>
+              </CollapsibleTrigger>
+              <CollapsibleContent>
+                <div className="space-y-1 border-t border-border/60 px-4 pb-4 pt-3">
+                  {groupedEntries.map((workEntry) => (
+                    <div key={`work-row:${workEntry.id}`} className="flex items-start gap-2 py-1">
+                      <span className="mt-[7px] h-1.5 w-1.5 shrink-0 rounded-full bg-muted-foreground/30" />
+                      <div className="min-w-0 flex-1 py-[2px]">
+                        <p className={`text-[11px] leading-relaxed ${workToneClass(workEntry.tone)}`}>
+                          {workEntry.label}
+                        </p>
+                        {workEntry.command && (
+                          <pre className="chat-code-block-surface mt-1 overflow-x-auto rounded-md border border-border/70 px-2 py-1 font-mono text-[11px] leading-relaxed text-foreground/80">
+                            {workEntry.command}
+                          </pre>
                         )}
+                        {workEntry.changedFiles && workEntry.changedFiles.length > 0 && (
+                          <div className="mt-1 flex flex-wrap gap-1">
+                            {workEntry.changedFiles.slice(0, 6).map((filePath) => (
+                              <span
+                                key={`${workEntry.id}:${filePath}`}
+                                className="rounded-md border border-border/70 bg-background/65 px-1.5 py-0.5 font-mono text-[10px] text-muted-foreground/85"
+                                title={filePath}
+                              >
+                                {filePath}
+                              </span>
+                            ))}
+                            {workEntry.changedFiles.length > 6 && (
+                              <span className="px-1 text-[10px] text-muted-foreground/65">
+                                +{workEntry.changedFiles.length - 6} more
+                              </span>
+                            )}
+                          </div>
+                        )}
+                        {workEntry.detail &&
+                          (!workEntry.command || workEntry.detail !== workEntry.command) && (
+                            <p
+                              className="mt-1 text-[11px] leading-relaxed text-muted-foreground/75"
+                              title={workEntry.detail}
+                            >
+                              {workEntry.detail}
+                            </p>
+                          )}
+                      </div>
                     </div>
-                  </div>
-                ))}
-              </div>
-            </div>
+                  ))}
+                </div>
+              </CollapsibleContent>
+            </Collapsible>
           );
         })()}
 
@@ -5265,69 +5307,76 @@ const MessagesTimeline = memo(function MessagesTimeline({
           const canRevertAgentWork = revertTurnCountByUserMessageId.has(row.message.id);
           return (
             <div className="flex justify-end">
-              <div className="group relative max-w-[80%] rounded-2xl rounded-br-sm border border-border bg-secondary px-4 py-3">
-                {userImages.length > 0 && (
-                  <div className="mb-2 grid max-w-[420px] grid-cols-2 gap-2">
-                    {userImages.map(
-                      (image: NonNullable<TimelineMessage["attachments"]>[number]) => (
-                        <div
-                          key={image.id}
-                          className="overflow-hidden rounded-lg border border-border/80 bg-background/70"
-                        >
-                          {image.previewUrl ? (
-                            <button
-                              type="button"
-                              className="h-full w-full cursor-zoom-in"
-                              aria-label={`Preview ${image.name}`}
-                              onClick={() => {
-                                const preview = buildExpandedImagePreview(userImages, image.id);
-                                if (!preview) return;
-                                onImageExpand(preview);
-                              }}
-                            >
-                              <img
-                                src={image.previewUrl}
-                                alt={image.name}
-                                className="h-full max-h-[220px] w-full object-cover"
-                                onLoad={onTimelineImageLoad}
-                                onError={onTimelineImageLoad}
-                              />
-                            </button>
-                          ) : (
-                            <div className="flex min-h-[72px] items-center justify-center px-2 py-3 text-center text-[11px] text-muted-foreground/70">
-                              {image.name}
-                            </div>
-                          )}
-                        </div>
-                      ),
+              <div className="group flex max-w-[76%] flex-col items-end gap-2">
+                <div className="relative w-fit max-w-[23rem] rounded-[24px] border border-white/6 bg-[#202020] px-4 py-2.5 shadow-[0_14px_26px_rgba(0,0,0,0.2)]">
+                  {userImages.length > 0 && (
+                    <div className="mb-2 grid max-w-full grid-cols-2 gap-2">
+                      {userImages.map(
+                        (image: NonNullable<TimelineMessage["attachments"]>[number]) => (
+                          <div
+                            key={image.id}
+                            className="overflow-hidden rounded-lg border border-border/80 bg-background/70"
+                          >
+                            {image.previewUrl ? (
+                              <button
+                                type="button"
+                                className="h-full w-full cursor-zoom-in"
+                                aria-label={`Preview ${image.name}`}
+                                onClick={() => {
+                                  const preview = buildExpandedImagePreview(userImages, image.id);
+                                  if (!preview) return;
+                                  onImageExpand(preview);
+                                }}
+                              >
+                                <img
+                                  src={image.previewUrl}
+                                  alt={image.name}
+                                  className="h-full max-h-[220px] w-full object-cover"
+                                  onLoad={onTimelineImageLoad}
+                                  onError={onTimelineImageLoad}
+                                />
+                              </button>
+                            ) : (
+                              <div className="flex min-h-[72px] items-center justify-center px-2 py-3 text-center text-[11px] text-muted-foreground/70">
+                                {image.name}
+                              </div>
+                            )}
+                          </div>
+                        ),
+                      )}
+                    </div>
+                  )}
+                  {row.message.text && (
+                    <pre className="whitespace-pre-wrap wrap-break-word bg-transparent text-center font-sans text-[14px] font-medium leading-6 text-foreground">
+                      {row.message.text}
+                    </pre>
+                  )}
+                </div>
+                {(row.message.text || canRevertAgentWork) && (
+                  <div className="flex w-full justify-end gap-2 text-muted-foreground/58 opacity-0 transition-opacity duration-150 group-hover:opacity-100 group-focus-within:opacity-100">
+                    {row.message.text && (
+                      <MessageCopyButton
+                        text={row.message.text}
+                        iconOnly
+                        className="size-8 rounded-full text-muted-foreground/58 hover:bg-transparent hover:text-foreground/84"
+                      />
                     )}
-                  </div>
-                )}
-                {row.message.text && (
-                  <pre className="whitespace-pre-wrap wrap-break-word font-mono text-sm leading-relaxed text-foreground">
-                    {row.message.text}
-                  </pre>
-                )}
-                <div className="mt-1.5 flex items-center justify-end gap-2">
-                  <div className="flex items-center gap-1.5 opacity-0 transition-opacity duration-200 focus-within:opacity-100 group-hover:opacity-100">
-                    {row.message.text && <MessageCopyButton text={row.message.text} />}
                     {canRevertAgentWork && (
                       <Button
                         type="button"
-                        size="xs"
-                        variant="outline"
+                        size="icon-sm"
+                        variant="ghost"
+                        className="size-8 rounded-full text-muted-foreground/58 hover:bg-transparent hover:text-foreground/84"
                         disabled={isRevertingCheckpoint || isWorking}
                         onClick={() => onRevertUserMessage(row.message.id)}
-                        title="Revert to this message"
+                        title="Re-edit from this message"
+                        aria-label="Re-edit from this message"
                       >
-                        <Undo2Icon className="size-3" />
+                        <SquarePenIcon className="size-3.5" />
                       </Button>
                     )}
                   </div>
-                  <p className="text-right text-[10px] text-muted-foreground/30">
-                    {formatTimestamp(row.message.createdAt)}
-                  </p>
-                </div>
+                )}
               </div>
             </div>
           );
@@ -5342,7 +5391,7 @@ const MessagesTimeline = memo(function MessagesTimeline({
               {row.showCompletionDivider && (
                 <div className="my-3 flex items-center gap-3">
                   <span className="h-px flex-1 bg-gradient-to-r from-transparent via-border to-transparent" />
-                  <span className="rounded-full border border-border bg-primary/5 px-2.5 py-1 text-[10px] uppercase tracking-[0.14em] text-muted-foreground/80">
+                  <span className="rounded-full border border-border bg-primary/5 px-2.5 py-1 text-[10px] font-medium tracking-[0.04em] text-muted-foreground/80">
                     {completionSummary ? `Response • ${completionSummary}` : "Response"}
                   </span>
                   <span className="h-px flex-1 bg-gradient-to-r from-transparent via-border to-transparent" />
@@ -5364,9 +5413,9 @@ const MessagesTimeline = memo(function MessagesTimeline({
                   const allDirectoriesExpanded =
                     allDirectoriesExpandedByTurnId[turnSummary.turnId] ?? true;
                   return (
-                    <div className="mt-2 rounded-lg border border-border/80 bg-card/45 p-2.5">
+                    <div className="mt-3 rounded-2xl border border-border/70 bg-card/52 p-3 shadow-xs/5">
                       <div className="mb-1.5 flex items-center justify-between gap-2">
-                        <p className="text-[10px] uppercase tracking-[0.12em] text-muted-foreground/65">
+                        <p className="text-[10px] font-medium tracking-[0.04em] text-muted-foreground/65">
                           <span>Changed files ({changedFileCountLabel})</span>
                           {hasNonZeroStat(summaryStat) && (
                             <>
@@ -5455,25 +5504,25 @@ const MessagesTimeline = memo(function MessagesTimeline({
   if (!hasMessages && !isWorking) {
     return (
       <div className="flex h-full flex-col items-center justify-center gap-5 px-4">
-        <div className="text-center">
-          <h2 className="text-lg font-medium text-foreground/80">
+        <div className="rounded-[28px] border border-border/70 bg-card/64 px-8 py-8 text-center shadow-[0_20px_44px_rgba(0,0,0,0.1)] supports-[backdrop-filter]:bg-card/54 supports-[backdrop-filter]:backdrop-blur-xl">
+          <h2 className="text-xl font-semibold tracking-tight text-foreground/86">
             What would you like to build?
           </h2>
-          <p className="mt-1 text-sm text-muted-foreground/40">
+          <p className="mt-2 text-sm leading-6 text-muted-foreground/56">
             Describe your task in the composer below.
           </p>
-        </div>
-        <div className="flex flex-wrap justify-center gap-2">
-          {["Fix a bug", "Add a feature", "Refactor code", "Write tests"].map(
-            (hint) => (
-              <span
-                key={hint}
-                className="rounded-full border border-border/60 px-3 py-1.5 text-xs text-muted-foreground/50"
-              >
-                {hint}
-              </span>
-            ),
-          )}
+          <div className="mt-5 flex flex-wrap justify-center gap-2">
+            {["Fix a bug", "Add a feature", "Refactor code", "Write tests"].map(
+              (hint) => (
+                <span
+                  key={hint}
+                  className="rounded-full border border-border/60 bg-background/72 px-3 py-1.5 text-xs text-muted-foreground/58"
+                >
+                  {hint}
+                </span>
+              ),
+            )}
+          </div>
         </div>
       </div>
     );
@@ -5483,7 +5532,7 @@ const MessagesTimeline = memo(function MessagesTimeline({
     <div
       ref={timelineRootRef}
       data-timeline-root="true"
-      className="mx-auto w-full min-w-0 max-w-3xl overflow-x-hidden"
+      className="mx-auto w-full min-w-0 max-w-[57.5rem] overflow-x-hidden"
     >
       {virtualizedRowCount > 0 && (
         <div className="relative" style={{ height: `${rowVirtualizer.getTotalSize()}px` }}>
@@ -5523,10 +5572,6 @@ function isAvailableProviderOption(option: (typeof PROVIDER_OPTIONS)[number]): o
 
 const AVAILABLE_PROVIDER_OPTIONS = PROVIDER_OPTIONS.filter(isAvailableProviderOption);
 const UNAVAILABLE_PROVIDER_OPTIONS = PROVIDER_OPTIONS.filter((option) => !option.available);
-const COMING_SOON_PROVIDER_OPTIONS = [
-  { id: "opencode", label: "OpenCode", icon: OpenCodeIcon },
-  { id: "gemini", label: "Gemini", icon: Gemini },
-] as const;
 
 function getCustomModelOptionsByProvider(settings: {
   customCodexModels: readonly string[];
@@ -5539,7 +5584,6 @@ function getCustomModelOptionsByProvider(settings: {
 const PROVIDER_ICON_BY_PROVIDER: Record<ProviderPickerKind, Icon> = {
   codex: OpenAI,
   claudeCode: ClaudeAI,
-  cursor: CursorIcon,
 };
 
 function resolveModelForProviderPicker(
@@ -5685,20 +5729,7 @@ const ProviderModelPicker = memo(function ProviderModelPicker(props: {
                 )}
               />
               <span>{option.label}</span>
-              <span className="ms-auto text-[11px] text-muted-foreground/80 uppercase tracking-[0.08em]">
-                Coming soon
-              </span>
-            </MenuItem>
-          );
-        })}
-        {UNAVAILABLE_PROVIDER_OPTIONS.length === 0 && <MenuDivider />}
-        {COMING_SOON_PROVIDER_OPTIONS.map((option) => {
-          const OptionIcon = option.icon;
-          return (
-            <MenuItem key={option.id} disabled>
-              <OptionIcon aria-hidden="true" className="size-4 shrink-0 opacity-80" />
-              <span>{option.label}</span>
-              <span className="ms-auto text-[11px] text-muted-foreground/80 uppercase tracking-[0.08em]">
+              <span className="ms-auto text-[11px] font-medium text-muted-foreground/80 tracking-[0.04em]">
                 Coming soon
               </span>
             </MenuItem>
@@ -5713,7 +5744,6 @@ const CompactComposerControlsMenu = memo(function CompactComposerControlsMenu(pr
   activePlan: boolean;
   interactionMode: ProviderInteractionMode;
   planSidebarOpen: boolean;
-  runtimeMode: RuntimeMode;
   selectedEffort: CodexReasoningEffort | null;
   selectedProvider: ProviderKind;
   selectedCodexFastModeEnabled: boolean;
@@ -5722,7 +5752,6 @@ const CompactComposerControlsMenu = memo(function CompactComposerControlsMenu(pr
   onCodexFastModeChange: (enabled: boolean) => void;
   onToggleInteractionMode: () => void;
   onTogglePlanSidebar: () => void;
-  onToggleRuntimeMode: () => void;
 }) {
   const defaultReasoningEffort = getDefaultReasoningEffort("codex");
   const reasoningLabelByOption: Record<CodexReasoningEffort, string> = {
@@ -5793,22 +5822,8 @@ const CompactComposerControlsMenu = memo(function CompactComposerControlsMenu(pr
               props.onToggleInteractionMode();
             }}
           >
-            <MenuRadioItem value="default">Chat</MenuRadioItem>
+            <MenuRadioItem value="default">Agent</MenuRadioItem>
             <MenuRadioItem value="plan">Plan</MenuRadioItem>
-          </MenuRadioGroup>
-        </MenuGroup>
-        <MenuDivider />
-        <MenuGroup>
-          <div className="px-2 py-1.5 font-medium text-muted-foreground text-xs">Access</div>
-          <MenuRadioGroup
-            value={props.runtimeMode}
-            onValueChange={(value) => {
-              if (!value || value === props.runtimeMode) return;
-              props.onToggleRuntimeMode();
-            }}
-          >
-            <MenuRadioItem value="approval-required">Supervised</MenuRadioItem>
-            <MenuRadioItem value="full-access">Full access</MenuRadioItem>
           </MenuRadioGroup>
         </MenuGroup>
         {props.activePlan ? (
@@ -5863,6 +5878,7 @@ const CodexTraitsPicker = memo(function CodexTraitsPicker(props: {
           />
         }
       >
+        <BrainIcon aria-hidden="true" className="size-4 shrink-0 text-muted-foreground/70" />
         <span>{triggerLabel}</span>
         <ChevronDownIcon aria-hidden="true" className="size-3 opacity-60" />
       </MenuTrigger>

@@ -407,7 +407,7 @@ export default function DiffPanel({ mode = "inline" }: DiffPanelProps) {
         <button
           type="button"
           className={cn(
-            "absolute left-0 top-1/2 z-20 inline-flex size-6 -translate-y-1/2 items-center justify-center rounded-md border bg-background/90 text-muted-foreground transition-colors",
+            "absolute left-0 top-1/2 z-20 inline-flex size-7 -translate-y-1/2 items-center justify-center rounded-full border bg-background/92 text-muted-foreground transition-colors shadow-xs/5",
             canScrollTurnStripLeft
               ? "border-border/70 hover:border-border hover:text-foreground"
               : "cursor-not-allowed border-border/40 text-muted-foreground/40",
@@ -421,7 +421,7 @@ export default function DiffPanel({ mode = "inline" }: DiffPanelProps) {
         <button
           type="button"
           className={cn(
-            "absolute right-0 top-1/2 z-20 inline-flex size-6 -translate-y-1/2 items-center justify-center rounded-md border bg-background/90 text-muted-foreground transition-colors",
+            "absolute right-0 top-1/2 z-20 inline-flex size-7 -translate-y-1/2 items-center justify-center rounded-full border bg-background/92 text-muted-foreground transition-colors shadow-xs/5",
             canScrollTurnStripRight
               ? "border-border/70 hover:border-border hover:text-foreground"
               : "cursor-not-allowed border-border/40 text-muted-foreground/40",
@@ -434,7 +434,7 @@ export default function DiffPanel({ mode = "inline" }: DiffPanelProps) {
         </button>
         <div
           ref={turnStripRef}
-          className="turn-chip-strip flex gap-1 overflow-x-auto px-8 py-0.5"
+          className="turn-chip-strip flex gap-1.5 overflow-x-auto px-9 py-0.5"
           onWheel={onTurnStripWheel}
         >
           <button
@@ -445,13 +445,13 @@ export default function DiffPanel({ mode = "inline" }: DiffPanelProps) {
           >
             <div
               className={cn(
-                "rounded-md border px-2 py-1 text-left transition-colors",
+                "rounded-xl border px-2.5 py-1.5 text-left transition-colors",
                 selectedTurnId === null
-                  ? "border-border bg-accent text-accent-foreground"
-                  : "border-border/70 bg-background/70 text-muted-foreground/80 hover:border-border hover:text-foreground/80",
+                  ? "border-border bg-accent/55 text-accent-foreground shadow-xs/5"
+                  : "border-border/70 bg-background/72 text-muted-foreground/80 hover:border-border hover:text-foreground/80",
               )}
             >
-              <div className="text-[10px] leading-tight font-medium">All turns</div>
+              <div className="text-[10px] leading-tight font-medium tracking-[0.04em]">All turns</div>
             </div>
           </button>
           {orderedTurnDiffSummaries.map((summary) => (
@@ -465,10 +465,10 @@ export default function DiffPanel({ mode = "inline" }: DiffPanelProps) {
             >
               <div
                 className={cn(
-                  "rounded-md border px-2 py-1 text-left transition-colors",
+                  "rounded-xl border px-2.5 py-1.5 text-left transition-colors",
                   summary.turnId === selectedTurn?.turnId
-                    ? "border-border bg-accent text-accent-foreground"
-                    : "border-border/70 bg-background/70 text-muted-foreground/80 hover:border-border hover:text-foreground/80",
+                    ? "border-border bg-accent/55 text-accent-foreground shadow-xs/5"
+                    : "border-border/70 bg-background/72 text-muted-foreground/80 hover:border-border hover:text-foreground/80",
                 )}
               >
                 <div className="flex items-center gap-1">
@@ -509,14 +509,16 @@ export default function DiffPanel({ mode = "inline" }: DiffPanelProps) {
     </>
   );
   const headerRowClassName = cn(
-    "flex items-center justify-between gap-2 px-4",
-    shouldUseDragRegion ? "drag-region h-[52px] border-b border-border" : "h-12",
+    "flex items-center justify-between gap-3 px-4",
+    shouldUseDragRegion
+      ? "drag-region h-[52px] border-b border-border/70 bg-background/96"
+      : "h-[52px] bg-background/96",
   );
 
   return (
     <div
       className={cn(
-        "flex h-full min-w-0 flex-col bg-background",
+        "flex h-full min-w-0 flex-col bg-card/86 supports-[backdrop-filter]:bg-card/78 supports-[backdrop-filter]:backdrop-blur-xl",
         mode === "inline"
           ? "w-[42vw] min-w-[360px] max-w-[560px] shrink-0 border-l border-border"
           : "w-full",
@@ -525,7 +527,7 @@ export default function DiffPanel({ mode = "inline" }: DiffPanelProps) {
       {shouldUseDragRegion ? (
         <div className={headerRowClassName}>{headerRow}</div>
       ) : (
-        <div className="border-b border-border">
+        <div className="border-b border-border/70">
           <div className={headerRowClassName}>{headerRow}</div>
         </div>
       )}
@@ -546,7 +548,7 @@ export default function DiffPanel({ mode = "inline" }: DiffPanelProps) {
         <>
           <div
             ref={patchViewportRef}
-            className="diff-panel-viewport min-h-0 min-w-0 flex-1 overflow-hidden"
+            className="diff-panel-viewport min-h-0 min-w-0 flex-1 overflow-hidden bg-transparent"
           >
             {checkpointDiffError && !renderablePatch && (
               <div className="px-3">
@@ -565,7 +567,7 @@ export default function DiffPanel({ mode = "inline" }: DiffPanelProps) {
               </div>
             ) : renderablePatch.kind === "files" ? (
               <Virtualizer
-                className="diff-render-surface h-full min-h-0 overflow-auto px-2 pb-2"
+                className="diff-render-surface h-full min-h-0 overflow-auto px-3 pb-3"
                 config={{
                   overscrollSize: 600,
                   intersectionObserverMargin: 1200,
@@ -579,7 +581,7 @@ export default function DiffPanel({ mode = "inline" }: DiffPanelProps) {
                     <div
                       key={themedFileKey}
                       data-diff-file-path={filePath}
-                      className="diff-render-file mb-2 rounded-md first:mt-2 last:mb-0"
+                      className="diff-render-file mb-3 rounded-xl first:mt-3 last:mb-0"
                       onClickCapture={(event) => {
                         const nativeEvent = event.nativeEvent as MouseEvent;
                         const composedPath = nativeEvent.composedPath?.() ?? [];

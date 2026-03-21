@@ -40,14 +40,14 @@ const TINT_OPTIONS: Array<{
   description: string;
 }> = [
   {
-    value: "violet",
-    label: "Blue / Violet",
-    description: "Tinted dark surfaces with a subtle violet hue.",
-  },
-  {
     value: "neutral",
     label: "Neutral Charcoal",
-    description: "Pure neutral dark surfaces with no color bias.",
+    description: "Default dark appearance with no color bias, matching the main app shell.",
+  },
+  {
+    value: "violet",
+    label: "Blue / Violet",
+    description: "Alternate dark appearance with a subtle blue-violet tint.",
   },
 ];
 
@@ -256,7 +256,7 @@ function SettingsRouteView() {
                 <div className="mb-3">
                   <h3 className="text-xs font-medium text-foreground">Color Tint</h3>
                   <p className="mt-1 text-xs text-muted-foreground">
-                    Choose a background tint for dark mode.
+                    Choose the default dark shell look.
                   </p>
                 </div>
 

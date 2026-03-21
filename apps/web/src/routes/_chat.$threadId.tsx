@@ -127,6 +127,7 @@ const DiffPanelInlineSidebar = (props: {
       open={diffOpen}
       onOpenChange={onOpenChange}
       className="w-auto min-h-0 flex-none bg-transparent"
+      data-chat-inline-diff-panel={diffOpen ? "open" : "closed"}
       style={{ "--sidebar-width": DIFF_INLINE_DEFAULT_WIDTH } as React.CSSProperties}
     >
       <Sidebar
@@ -200,7 +201,7 @@ function ChatThreadRouteView() {
   if (!shouldUseDiffSheet) {
     return (
       <>
-        <SidebarInset className="h-dvh min-h-0 overflow-hidden overscroll-y-none bg-background text-foreground">
+        <SidebarInset className="chat-shell-surface h-dvh min-h-0 overflow-hidden overscroll-y-none text-foreground">
           <ChatView key={threadId} threadId={threadId} />
         </SidebarInset>
         <DiffPanelInlineSidebar diffOpen={diffOpen} onCloseDiff={closeDiff} onOpenDiff={openDiff} />
@@ -210,7 +211,7 @@ function ChatThreadRouteView() {
 
   return (
     <>
-      <SidebarInset className="h-dvh min-h-0 overflow-hidden overscroll-y-none bg-background text-foreground">
+      <SidebarInset className="chat-shell-surface h-dvh min-h-0 overflow-hidden overscroll-y-none text-foreground">
         <ChatView key={threadId} threadId={threadId} />
       </SidebarInset>
       <DiffPanelSheet diffOpen={diffOpen} onCloseDiff={closeDiff}>

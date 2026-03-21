@@ -16,49 +16,53 @@ function ChatIndexRouteView() {
   const { toggleSidebar, open } = useSidebar();
 
   return (
-    <div className="flex min-h-0 min-w-0 flex-1 flex-col bg-background">
+    <div className="chat-shell-surface flex min-h-0 min-w-0 flex-1 flex-col">
       {!isElectron && (
-        <header className="border-b border-border px-3 py-2 md:hidden">
+        <header className="chat-shell-surface border-b border-border/70 px-4 py-3 md:hidden">
           <div className="flex items-center gap-2">
             <SidebarTrigger className="size-7 shrink-0" />
-            <span className="text-sm font-medium text-foreground">Threads</span>
+            <span className="text-sm font-medium text-foreground/84">Threads</span>
           </div>
         </header>
       )}
 
       {isElectron && (
-        <div className="drag-region flex h-[52px] shrink-0 items-center border-b border-border px-5">
-          <span className="text-xs text-muted-foreground/50">No active thread</span>
+        <div className="chat-shell-surface drag-region flex h-[52px] shrink-0 items-center border-b border-border/70 px-6">
+          <span className="text-xs font-medium tracking-[0.08em] text-muted-foreground/58">
+            No active thread
+          </span>
         </div>
       )}
 
-      <Empty className="relative">
-        {/* Subtle animated gradient background */}
-        <div className="animate-welcome-glow pointer-events-none absolute inset-0 opacity-30 dark:opacity-20">
-          <div className="absolute inset-0 bg-[radial-gradient(ellipse_at_center,var(--primary)_0%,transparent_70%)] opacity-8" />
-        </div>
-
-        <EmptyHeader className="relative max-w-md gap-4">
-          <OciWordmark className="mb-2 h-5" />
-          <EmptyTitle className="text-2xl">Welcome to OCI Code</EmptyTitle>
-          <EmptyDescription className="text-muted-foreground/60">
-            Select a thread from the sidebar or create a new one to start building.
-          </EmptyDescription>
+      <Empty className="relative px-6">
+        <div className="absolute inset-0 pointer-events-none bg-[radial-gradient(circle_at_top,rgba(255,255,255,0.05),transparent_55%)]" />
+        <EmptyHeader className="relative max-w-lg gap-5 rounded-[28px] border border-border/70 bg-card/70 px-8 py-10 text-left shadow-[0_22px_48px_rgba(0,0,0,0.12)] supports-[backdrop-filter]:bg-card/60 supports-[backdrop-filter]:backdrop-blur-xl">
+          <OciWordmark className="h-4.5 text-foreground/88" />
+          <div className="space-y-2">
+            <EmptyTitle className="text-3xl font-semibold tracking-tight text-foreground/92">
+              Start from a thread or open a project.
+            </EmptyTitle>
+            <EmptyDescription className="max-w-md text-sm leading-6 text-muted-foreground/66">
+              Use the sidebar to jump back into recent work, or create a new thread for the
+              project you want to change next.
+            </EmptyDescription>
+          </div>
         </EmptyHeader>
 
-        <div className="relative mt-2 flex items-center gap-3">
+        <div className="relative mt-5 flex flex-wrap items-center justify-center gap-3">
           <Button
-            variant="default"
+            variant="outline"
             size="sm"
+            className="h-10 rounded-full border-border/80 bg-background/80 px-4 shadow-xs/5"
             onClick={() => {
               if (!open) toggleSidebar();
             }}
           >
             <SquarePenIcon className="mr-1.5 size-3.5" />
-            New Thread
+            Browse threads
           </Button>
-          <span className="text-xs text-muted-foreground/40">
-            or use the sidebar
+          <span className="text-xs uppercase tracking-[0.12em] text-muted-foreground/42">
+            sidebar-first workflow
           </span>
         </div>
       </Empty>
