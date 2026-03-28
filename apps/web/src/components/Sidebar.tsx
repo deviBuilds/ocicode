@@ -2316,7 +2316,6 @@ export default function Sidebar() {
         })}
       </SidebarContent>
 
-      <div className="mx-3 h-px bg-border/70" />
       <SidebarFooter className="p-2">
         <SidebarMenu>
           <SidebarMenuItem>

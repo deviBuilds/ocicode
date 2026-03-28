@@ -4035,18 +4035,16 @@ export default function ChatView({ threadId }: ChatViewProps) {
                       ) : phase === "running" ? (
                         <button
                           type="button"
-                          className="relative flex size-8 items-center justify-center rounded-full bg-rose-500/90 text-white transition-all duration-150 hover:bg-rose-500 hover:scale-105 sm:h-8 sm:w-8"
+                          className="flex size-8 cursor-pointer items-center justify-center rounded-full bg-rose-500/90 text-white transition-all duration-150 hover:bg-rose-500 hover:scale-105 sm:h-8 sm:w-8"
                           onClick={() => void onInterrupt()}
                           aria-label="Stop generation"
                         >
-                          <span className="absolute inset-0 animate-ping rounded-full bg-rose-500/30" />
                           <svg
                             width="12"
                             height="12"
                             viewBox="0 0 12 12"
                             fill="currentColor"
                             aria-hidden="true"
-                            className="relative"
                           >
                             <rect x="2" y="2" width="8" height="8" rx="1.5" />
                           </svg>
