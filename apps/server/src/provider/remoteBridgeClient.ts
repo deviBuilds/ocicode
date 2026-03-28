@@ -1,4 +1,5 @@
 import crypto from "node:crypto";
+import type { IncomingMessage } from "node:http";
 
 import {
   PROVIDER_BRIDGE_CHANNELS,
@@ -43,6 +44,8 @@ type ToolRequestHandler = (
   request: typeof ProviderBridgeToolHostRequestPayload.Type,
 ) => Promise<ToolRequestHandlerResult>;
 
+const REMOTE_PROVIDER_BRIDGE_CONNECT_TIMEOUT_MS = 10_000;
+
 function websocketRawToString(raw: WebSocket.RawData): string | null {
   if (typeof raw === "string") {
     return raw;
@@ -66,6 +69,21 @@ function toBridgeUrl(baseUrl: string, sharedSecret: string): string {
   url.pathname = PROVIDER_BRIDGE_WS_PATH;
   url.searchParams.set("secret", sharedSecret);
   return url.toString();
+}
+
+function formatUnexpectedBridgeUpgrade(response: IncomingMessage): string {
+  const statusCode = response.statusCode ?? "unknown";
+  const statusMessage = response.statusMessage?.trim();
+  const location = response.headers.location?.trim();
+  const suffix = [
+    statusMessage && statusMessage.length > 0 ? statusMessage : undefined,
+    location && location.length > 0 ? `Location: ${location}` : undefined,
+  ]
+    .filter((value): value is string => value !== undefined)
+    .join(" · ");
+  return suffix.length > 0
+    ? `Remote provider bridge rejected websocket upgrade (${statusCode}: ${suffix}).`
+    : `Remote provider bridge rejected websocket upgrade (${statusCode}).`;
 }
 
 class RemoteProviderBridgeClient {
@@ -226,6 +244,19 @@ class RemoteProviderBridgeClient {
     const url = toBridgeUrl(this.baseUrl, this.sharedSecret);
     this.connectPromise = new Promise<WebSocket>((resolve, reject) => {
       const socket = new WebSocket(url);
+      const timeout = setTimeout(() => {
+        cleanup();
+        try {
+          socket.terminate();
+        } catch {
+          // ignore termination failures while timing out
+        }
+        reject(
+          new Error(
+            `Timed out connecting to remote provider bridge after ${REMOTE_PROVIDER_BRIDGE_CONNECT_TIMEOUT_MS}ms.`,
+          ),
+        );
+      }, REMOTE_PROVIDER_BRIDGE_CONNECT_TIMEOUT_MS);
       const onOpen = () => {
         cleanup();
         this.socket = socket;
@@ -244,12 +275,24 @@ class RemoteProviderBridgeClient {
         cleanup();
         reject(error);
       };
+      const onUnexpectedResponse = (_request: unknown, response: IncomingMessage) => {
+        cleanup();
+        try {
+          socket.close();
+        } catch {
+          // ignore close failures while rejecting unexpected upgrades
+        }
+        reject(new Error(formatUnexpectedBridgeUpgrade(response)));
+      };
       const cleanup = () => {
+        clearTimeout(timeout);
         socket.off("open", onOpen);
         socket.off("error", onError);
+        socket.off("unexpected-response", onUnexpectedResponse);
       };
       socket.once("open", onOpen);
       socket.once("error", onError);
+      socket.once("unexpected-response", onUnexpectedResponse);
     }).finally(() => {
       this.connectPromise = null;
     });

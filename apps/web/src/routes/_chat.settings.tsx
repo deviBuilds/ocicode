@@ -554,7 +554,7 @@ function SettingsRouteView() {
                             {healthStatus?.executionMode ? ` · ${healthStatus.executionMode}` : ""}
                           </p>
                           <p className="mt-1 text-xs text-muted-foreground">
-                            {healthQuery.isLoading
+                            {healthQuery.isFetching
                               ? "Checking provider status..."
                               : (healthStatus?.message ??
                                 (healthStatus?.available
@@ -565,9 +565,10 @@ function SettingsRouteView() {
                             <Button
                               size="xs"
                               variant="outline"
+                              disabled={healthQuery.isFetching}
                               onClick={() => healthQuery.refetch()}
                             >
-                              Test connection
+                              {healthQuery.isFetching ? "Testing..." : "Test connection"}
                             </Button>
                           </div>
                         </div>
