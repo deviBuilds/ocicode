@@ -596,8 +596,8 @@ it.effect("keeps AskUserQuestion active for local-proxy Claude full-access sessi
     });
 
     assert.strictEqual(capturedOptions?.includePartialMessages, true);
-    assert.strictEqual(capturedOptions?.permissionMode, undefined);
-    assert.strictEqual(capturedOptions?.allowDangerouslySkipPermissions, undefined);
+    assert.strictEqual(capturedOptions?.permissionMode, "bypassPermissions");
+    assert.strictEqual(capturedOptions?.allowDangerouslySkipPermissions, true);
 
     const requestedEvent = yield* Effect.promise(() =>
       waitForValue(

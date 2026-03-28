@@ -940,11 +940,10 @@ function buildClaudeQueryOptions(input: {
   readonly canUseTool?: CanUseTool;
   readonly interactionMode?: "default" | "plan";
 }): ClaudeQueryOptions {
-  const usesWorkspaceProxy = input.context.workspaceProxy !== undefined;
   const permissionMode =
     input.interactionMode === "plan"
       ? "plan"
-      : !usesWorkspaceProxy && input.context.session.runtimeMode === "full-access"
+      : input.context.session.runtimeMode === "full-access"
         ? "bypassPermissions"
         : undefined;
   const normalizedModelOptions = normalizeClaudeModelOptions(
@@ -2200,9 +2199,9 @@ const makeClaudeAdapter = (options?: ClaudeAdapterLiveOptions) =>
         );
 
         const basePermissionMode =
-          workspaceProxy || input.runtimeMode !== "full-access"
-            ? ("default" as PermissionMode)
-            : ("bypassPermissions" as PermissionMode);
+          input.runtimeMode === "full-access"
+            ? ("bypassPermissions" as PermissionMode)
+            : ("default" as PermissionMode);
         const queryOptions = buildClaudeQueryOptions({
           context: {
             session,
