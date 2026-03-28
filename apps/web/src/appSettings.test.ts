@@ -80,5 +80,6 @@ describe("getAppSettingsSnapshot", () => {
 
     expect(settings.defaultThreadEnvMode).toBe("local");
     expect(settings.timestampFormat).toBe("locale");
+    expect(settings.claudeMode).toBe("local");
   });
 });

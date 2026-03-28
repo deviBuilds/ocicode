@@ -431,7 +431,9 @@ describe("composerDraftStore codex fast mode", () => {
     const store = useComposerDraftStore.getState();
     store.setCodexFastMode(threadId, true);
 
-    expect(useComposerDraftStore.getState().draftsByThreadId[threadId]?.codexFastMode).toBe(true);
+    expect(
+      useComposerDraftStore.getState().draftsByThreadId[threadId]?.providerModelOptions,
+    ).toEqual({ codex: { fastMode: true } });
   });
 
   it("clears codex fast mode when reset to the default", () => {
@@ -440,6 +442,36 @@ describe("composerDraftStore codex fast mode", () => {
     store.setCodexFastMode(threadId, false);
 
     expect(useComposerDraftStore.getState().draftsByThreadId[threadId]).toBeUndefined();
+  });
+});
+
+describe("composerDraftStore provider model options", () => {
+  const threadId = ThreadId.makeUnsafe("thread-provider-model-options");
+
+  beforeEach(() => {
+    useComposerDraftStore.setState({
+      draftsByThreadId: {},
+      draftThreadsByThreadId: {},
+      projectDraftThreadIdByProjectId: {},
+    });
+  });
+
+  it("stores claude provider traits in providerModelOptions", () => {
+    useComposerDraftStore.getState().setProviderModelOptions(threadId, "claudeAgent", {
+      effort: "ultrathink",
+      thinking: false,
+      contextWindow: "1m",
+    });
+
+    expect(
+      useComposerDraftStore.getState().draftsByThreadId[threadId]?.providerModelOptions,
+    ).toEqual({
+      claudeAgent: {
+        effort: "ultrathink",
+        thinking: false,
+        contextWindow: "1m",
+      },
+    });
   });
 });
 

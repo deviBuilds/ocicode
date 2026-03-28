@@ -34,7 +34,7 @@ const AppSettingsSchema = Schema.Struct({
     Schema.withConstructorDefault(() => Option.some("")),
   ),
   claudeMode: Schema.Literals(["disabled", "local", "remote"]).pipe(
-    Schema.withConstructorDefault(() => Option.some("disabled")),
+    Schema.withConstructorDefault(() => Option.some("local")),
   ),
   claudeBinaryPath: Schema.String.check(Schema.isMaxLength(4096)).pipe(
     Schema.withConstructorDefault(() => Option.some("")),

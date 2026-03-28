@@ -2,10 +2,16 @@ import { describe, expect, it } from "vitest";
 import { DEFAULT_MODEL_BY_PROVIDER, MODEL_OPTIONS_BY_PROVIDER } from "@ocicode/contracts";
 
 import {
+  applyClaudePromptEffortPrefix,
+  getDefaultContextWindow,
+  getDefaultEffort,
   getDefaultModel,
   getDefaultReasoningEffort,
+  getModelCapabilities,
   getModelOptions,
   getReasoningEffortOptions,
+  resolveEffort,
+  resolveSelectableModel,
   normalizeModelSlug,
   resolveModelSlug,
 } from "./model";
@@ -82,5 +88,43 @@ describe("getDefaultReasoningEffort", () => {
   it("returns provider-scoped defaults", () => {
     expect(getDefaultReasoningEffort("codex")).toBe("high");
     expect(getDefaultReasoningEffort("claudeAgent")).toBe("high");
+  });
+});
+
+describe("model capabilities", () => {
+  it("returns built-in claude capabilities", () => {
+    const caps = getModelCapabilities("claudeAgent", "claude-opus-4-6");
+    expect(getDefaultEffort(caps)).toBe("high");
+    expect(getDefaultContextWindow(caps)).toBe("1m");
+    expect(caps.promptInjectedEffortLevels).toEqual(["ultrathink"]);
+  });
+
+  it("resolves supported effort values and falls back to defaults", () => {
+    const caps = getModelCapabilities("claudeAgent", "claude-sonnet-4-6");
+    expect(resolveEffort(caps, "medium")).toBe("medium");
+    expect(resolveEffort(caps, "ultrathink")).toBe("high");
+    expect(resolveEffort(caps, "unknown")).toBe("high");
+  });
+
+  it("resolves selectable models from aliases and labels", () => {
+    expect(
+      resolveSelectableModel("claudeAgent", "sonnet", [
+        { slug: "claude-sonnet-4-6", name: "Claude Sonnet 4.6" },
+      ]),
+    ).toBe("claude-sonnet-4-6");
+    expect(
+      resolveSelectableModel("claudeAgent", "Claude Sonnet 4.6", [
+        { slug: "claude-sonnet-4-6", name: "Claude Sonnet 4.6" },
+      ]),
+    ).toBe("claude-sonnet-4-6");
+  });
+
+  it("injects the upstream ultrathink prompt prefix only once", () => {
+    expect(applyClaudePromptEffortPrefix("Review the diff", "ultrathink")).toBe(
+      "Ultrathink:\nReview the diff",
+    );
+    expect(applyClaudePromptEffortPrefix("Ultrathink:\nReview the diff", "ultrathink")).toBe(
+      "Ultrathink:\nReview the diff",
+    );
   });
 });

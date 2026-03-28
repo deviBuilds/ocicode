@@ -1,9 +1,9 @@
 import { type ModelSlug, type ProviderKind } from "@ocicode/contracts";
-import { normalizeModelSlug } from "@ocicode/shared/model";
+import { resolveSelectableModel } from "@ocicode/shared/model";
 import { memo, useState } from "react";
 import { ChevronDownIcon } from "lucide-react";
 
-import { Claude, type Icon, OpenAI } from "../Icons";
+import { ClaudeAI, type Icon, OpenAI } from "../Icons";
 import { Button } from "../ui/button";
 import {
   Menu,
@@ -20,28 +20,11 @@ import { cn } from "~/lib/utils";
 
 const PROVIDER_ICON_BY_PROVIDER: Record<ProviderKind, Icon> = {
   codex: OpenAI,
-  claudeAgent: Claude,
+  claudeAgent: ClaudeAI,
 };
 
-function resolveModelForProviderPicker(
-  provider: ProviderKind,
-  value: string,
-  options: ReadonlyArray<{ slug: string; name: string }>,
-): ModelSlug | null {
-  const trimmedValue = value.trim();
-  if (!trimmedValue) return null;
-
-  const direct = options.find((option) => option.slug === trimmedValue);
-  if (direct) return direct.slug;
-
-  const byName = options.find((option) => option.name.toLowerCase() === trimmedValue.toLowerCase());
-  if (byName) return byName.slug;
-
-  const normalized = normalizeModelSlug(trimmedValue, provider);
-  if (!normalized) return null;
-
-  const resolved = options.find((option) => option.slug === normalized);
-  return resolved?.slug ?? null;
+function providerIconClassName(provider: ProviderKind): string {
+  return provider === "claudeAgent" ? "text-[#d97757]" : "text-muted-foreground/70";
 }
 
 export const ProviderModelPicker = memo(function ProviderModelPicker(props: {
@@ -53,6 +36,7 @@ export const ProviderModelPicker = memo(function ProviderModelPicker(props: {
     label: string;
   }>;
   modelOptionsByProvider: Record<ProviderKind, ReadonlyArray<{ slug: string; name: string }>>;
+  activeProviderIconClassName?: string;
   compact?: boolean;
   disabled?: boolean;
   onProviderModelChange: (provider: ProviderKind, model: ModelSlug) => void;
@@ -93,7 +77,14 @@ export const ProviderModelPicker = memo(function ProviderModelPicker(props: {
             props.compact ? "max-w-[9rem]" : undefined,
           )}
         >
-          <ProviderIcon aria-hidden="true" className="size-4 shrink-0 text-muted-foreground/70" />
+          <ProviderIcon
+            aria-hidden="true"
+            className={cn(
+              "size-4 shrink-0",
+              providerIconClassName(props.provider),
+              props.activeProviderIconClassName,
+            )}
+          />
           <span className="truncate">{selectedModelLabel}</span>
           <ChevronDownIcon aria-hidden="true" className="size-3 opacity-60" />
         </span>
@@ -108,7 +99,7 @@ export const ProviderModelPicker = memo(function ProviderModelPicker(props: {
               <MenuSubTrigger disabled={isDisabledByProviderLock}>
                 <OptionIcon
                   aria-hidden="true"
-                  className="size-4 shrink-0 text-muted-foreground/85"
+                  className={cn("size-4 shrink-0", providerIconClassName(option.value))}
                 />
                 {option.label}
               </MenuSubTrigger>
@@ -118,7 +109,7 @@ export const ProviderModelPicker = memo(function ProviderModelPicker(props: {
                     value={props.provider === option.value ? props.model : ""}
                     onValueChange={(value) => {
                       if (props.disabled || isDisabledByProviderLock || !value) return;
-                      const resolvedModel = resolveModelForProviderPicker(
+                      const resolvedModel = resolveSelectableModel(
                         option.value,
                         value,
                         props.modelOptionsByProvider[option.value],

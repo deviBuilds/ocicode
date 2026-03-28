@@ -1,9 +1,5 @@
-import {
-  type CodexReasoningEffort,
-  type ProviderInteractionMode,
-  type ProviderKind,
-} from "@ocicode/contracts";
-import { getDefaultReasoningEffort } from "@ocicode/shared/model";
+import type { ProviderInteractionMode } from "@ocicode/contracts";
+import type { ReactNode } from "react";
 import { memo } from "react";
 import { EllipsisIcon, ListTodoIcon } from "lucide-react";
 
@@ -23,23 +19,11 @@ export const CompactComposerControlsMenu = memo(function CompactComposerControls
   activePlan: boolean;
   interactionMode: ProviderInteractionMode;
   planSidebarOpen: boolean;
-  selectedEffort: CodexReasoningEffort | null;
-  selectedProvider: ProviderKind;
-  selectedCodexFastModeEnabled: boolean;
-  reasoningOptions: ReadonlyArray<CodexReasoningEffort>;
-  onEffortSelect: (effort: CodexReasoningEffort) => void;
-  onCodexFastModeChange: (enabled: boolean) => void;
+  hasTraits: boolean;
+  traitsMenuContent: ReactNode;
   onToggleInteractionMode: () => void;
   onTogglePlanSidebar: () => void;
 }) {
-  const defaultReasoningEffort = getDefaultReasoningEffort("codex");
-  const reasoningLabelByOption: Record<CodexReasoningEffort, string> = {
-    low: "Low",
-    medium: "Medium",
-    high: "High",
-    xhigh: "Extra High",
-  };
-
   return (
     <Menu>
       <MenuTrigger
@@ -55,40 +39,9 @@ export const CompactComposerControlsMenu = memo(function CompactComposerControls
         <EllipsisIcon aria-hidden="true" className="size-4" />
       </MenuTrigger>
       <MenuPopup align="start">
-        {props.selectedProvider === "codex" && props.selectedEffort != null ? (
+        {props.hasTraits ? (
           <>
-            <MenuGroup>
-              <div className="px-2 py-1.5 text-xs font-medium text-muted-foreground">Reasoning</div>
-              <MenuRadioGroup
-                value={props.selectedEffort}
-                onValueChange={(value) => {
-                  if (!value) return;
-                  const nextEffort = props.reasoningOptions.find((option) => option === value);
-                  if (!nextEffort) return;
-                  props.onEffortSelect(nextEffort);
-                }}
-              >
-                {props.reasoningOptions.map((effort) => (
-                  <MenuRadioItem key={effort} value={effort}>
-                    {reasoningLabelByOption[effort]}
-                    {effort === defaultReasoningEffort ? " (default)" : ""}
-                  </MenuRadioItem>
-                ))}
-              </MenuRadioGroup>
-            </MenuGroup>
-            <MenuDivider />
-            <MenuGroup>
-              <div className="px-2 py-1.5 text-xs font-medium text-muted-foreground">Fast Mode</div>
-              <MenuRadioGroup
-                value={props.selectedCodexFastModeEnabled ? "on" : "off"}
-                onValueChange={(value) => {
-                  props.onCodexFastModeChange(value === "on");
-                }}
-              >
-                <MenuRadioItem value="off">off</MenuRadioItem>
-                <MenuRadioItem value="on">on</MenuRadioItem>
-              </MenuRadioGroup>
-            </MenuGroup>
+            {props.traitsMenuContent}
             <MenuDivider />
           </>
         ) : null}

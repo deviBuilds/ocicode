@@ -5,7 +5,12 @@ import { Effect, Layer, Sink, Stream } from "effect";
 import * as PlatformError from "effect/PlatformError";
 import { ChildProcessSpawner } from "effect/unstable/process";
 
-import { checkCodexProviderStatus, parseAuthStatusFromOutput } from "./ProviderHealth";
+import {
+  checkClaudeProviderStatus,
+  checkCodexProviderStatus,
+  parseAuthStatusFromOutput,
+  parseClaudeAuthStatusFromOutput,
+} from "./ProviderHealth";
 
 // ── Test helpers ────────────────────────────────────────────────────
 
@@ -197,6 +202,38 @@ it.effect("returns warning when login status command is unsupported", () =>
   ),
 );
 
+it.effect("returns ready when claude is installed and authenticated", () =>
+  Effect.gen(function* () {
+    const status = yield* checkClaudeProviderStatus();
+    assert.strictEqual(status.provider, "claudeAgent");
+    assert.strictEqual(status.status, "ready");
+    assert.strictEqual(status.available, true);
+    assert.strictEqual(status.authStatus, "authenticated");
+  }).pipe(
+    Effect.provide(
+      providerHealthTestLayer(
+        mockSpawnerLayer((args) => {
+          const joined = args.join(" ");
+          if (joined === "--version") return { stdout: "claude 2.0.0\n", stderr: "", code: 0 };
+          if (joined === "auth status") return { stdout: "Logged in\n", stderr: "", code: 0 };
+          throw new Error(`Unexpected args: ${joined}`);
+        }),
+      ),
+    ),
+  ),
+);
+
+it.effect("returns unavailable when claude is missing", () =>
+  Effect.gen(function* () {
+    const status = yield* checkClaudeProviderStatus();
+    assert.strictEqual(status.provider, "claudeAgent");
+    assert.strictEqual(status.status, "error");
+    assert.strictEqual(status.available, false);
+    assert.strictEqual(status.authStatus, "unknown");
+    assert.strictEqual(status.message, "Claude CLI (`claude`) is not installed or not on PATH.");
+  }).pipe(Effect.provide(providerHealthTestLayer(failingSpawnerLayer("spawn claude ENOENT")))),
+);
+
 // ── Pure function tests ─────────────────────────────────────────────
 
 it("parseAuthStatusFromOutput: exit code 0 with no auth markers is ready", () => {
@@ -223,4 +260,20 @@ it("parseAuthStatusFromOutput: JSON without auth marker is warning", () => {
   });
   assert.strictEqual(parsed.status, "warning");
   assert.strictEqual(parsed.authStatus, "unknown");
+});
+
+it("parseClaudeAuthStatusFromOutput: exit code 0 with no auth markers is ready", () => {
+  const parsed = parseClaudeAuthStatusFromOutput({ stdout: "OK\n", stderr: "", code: 0 });
+  assert.strictEqual(parsed.status, "ready");
+  assert.strictEqual(parsed.authStatus, "authenticated");
+});
+
+it("parseClaudeAuthStatusFromOutput: JSON with loggedIn=false is unauthenticated", () => {
+  const parsed = parseClaudeAuthStatusFromOutput({
+    stdout: '{"loggedIn":false}\n',
+    stderr: "",
+    code: 0,
+  });
+  assert.strictEqual(parsed.status, "error");
+  assert.strictEqual(parsed.authStatus, "unauthenticated");
 });

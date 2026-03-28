@@ -7,9 +7,11 @@ import { Effect, Layer, Stream } from "effect";
 import { ClaudeAdapter, ClaudeAdapterShape } from "../Services/ClaudeAdapter.ts";
 import { CodexAdapter, CodexAdapterShape } from "../Services/CodexAdapter.ts";
 import { ProviderAdapterRegistry } from "../Services/ProviderAdapterRegistry.ts";
-import { ProviderAdapterRegistryLive } from "./ProviderAdapterRegistry.ts";
+import {
+  makeProviderAdapterRegistryLive,
+  ProviderAdapterRegistryLive,
+} from "./ProviderAdapterRegistry.ts";
 import { ProviderUnsupportedError } from "../Errors.ts";
-import * as NodeServices from "@effect/platform-node/NodeServices";
 
 const fakeCodexAdapter: CodexAdapterShape = {
   provider: "codex",
@@ -46,15 +48,19 @@ const fakeClaudeAdapter: ClaudeAdapterShape = {
 };
 
 const layer = it.layer(
-  Layer.mergeAll(
-    Layer.provide(
-      ProviderAdapterRegistryLive,
-      Layer.mergeAll(
-        Layer.succeed(CodexAdapter, fakeCodexAdapter),
-        Layer.succeed(ClaudeAdapter, fakeClaudeAdapter),
-      ),
+  Layer.provide(
+    ProviderAdapterRegistryLive,
+    Layer.mergeAll(
+      Layer.succeed(CodexAdapter, fakeCodexAdapter),
+      Layer.succeed(ClaudeAdapter, fakeClaudeAdapter),
     ),
-    NodeServices.layer,
+  ),
+);
+
+const codexOnlyLayer = it.layer(
+  Layer.provide(
+    makeProviderAdapterRegistryLive({ includeClaudeAdapter: false }),
+    Layer.succeed(CodexAdapter, fakeCodexAdapter),
   ),
 );
 
@@ -75,6 +81,19 @@ layer("ProviderAdapterRegistryLive", (it) => {
       const registry = yield* ProviderAdapterRegistry;
       const adapter = yield* registry.getByProvider("unknown" as ProviderKind).pipe(Effect.result);
       assertFailure(adapter, new ProviderUnsupportedError({ provider: "unknown" }));
+    }),
+  );
+});
+
+codexOnlyLayer("ProviderAdapterRegistryLive codex-only", (it) => {
+  it.effect("does not register Claude when the provider gate is off", () =>
+    Effect.gen(function* () {
+      const registry = yield* ProviderAdapterRegistry;
+      const providers = yield* registry.listProviders();
+      assert.deepEqual(providers, ["codex"]);
+
+      const claude = yield* registry.getByProvider("claudeAgent").pipe(Effect.result);
+      assertFailure(claude, new ProviderUnsupportedError({ provider: "claudeAgent" }));
     }),
   );
 });

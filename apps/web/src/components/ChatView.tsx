@@ -1,9 +1,9 @@
 import {
   type ApprovalRequestId,
+  type ClaudeReasoningEffort,
   DEFAULT_MODEL_BY_PROVIDER,
   type EditorId,
   type KeybindingCommand,
-  type CodexReasoningEffort,
   type MessageId,
   type ProjectId,
   type ProjectEntry,
@@ -15,6 +15,7 @@ import {
   type ProviderApprovalDecision,
   type ServerProviderStatus,
   type ProviderKind,
+  type ProviderModelOptions,
   type ServerFeatureFlags,
   type ThreadId,
   type TurnId,
@@ -24,8 +25,9 @@ import {
 } from "@ocicode/contracts";
 import { makeStorageKey, WORKTREE_BRANCH_PREFIX } from "@ocicode/shared/branding";
 import {
+  applyClaudePromptEffortPrefix,
   getDefaultModel,
-  getDefaultReasoningEffort,
+  getModelCapabilities,
   normalizeModelSlug,
   resolveModelSlugForProvider,
 } from "@ocicode/shared/model";
@@ -116,6 +118,12 @@ import { ComposerPlanFollowUpBanner as ComposerPlanFollowUpBannerView } from "./
 import { ProviderModelPicker as ProviderModelPickerView } from "./chat/ProviderModelPicker";
 import { CompactComposerControlsMenu as CompactComposerControlsMenuView } from "./chat/CompactComposerControlsMenu";
 import {
+  getComposerProviderState,
+  renderProviderTraitsMenuContent,
+  renderProviderTraitsPicker,
+} from "./chat/composerProviderRegistry";
+import { hasProviderTraits } from "./chat/TraitsPicker";
+import {
   buildExpandedImagePreview as buildExpandedImagePreviewForDialog,
   ExpandedImagePreviewDialog,
   type ExpandedImagePreview as ExpandedImagePreviewState,
@@ -131,7 +139,6 @@ import {
 import PlanSidebar from "./PlanSidebar";
 import ThreadTerminalDrawer from "./ThreadTerminalDrawer";
 import {
-  BrainIcon,
   BotIcon,
   ChevronDownIcon,
   CircleAlertIcon,
@@ -142,16 +149,7 @@ import {
 } from "lucide-react";
 import { Button } from "./ui/button";
 import { Separator } from "./ui/separator";
-import {
-  Menu,
-  MenuGroup,
-  MenuItem,
-  MenuPopup,
-  MenuRadioGroup,
-  MenuRadioItem,
-  MenuSeparator as MenuDivider,
-  MenuTrigger,
-} from "./ui/menu";
+import { Menu, MenuItem, MenuPopup, MenuTrigger } from "./ui/menu";
 import { cn, randomUUID } from "~/lib/utils";
 import { Badge } from "./ui/badge";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "./ui/tooltip";
@@ -218,6 +216,19 @@ function getCustomModelOptionsByProvider(settings: {
     codex: getAppModelOptions("codex", settings.customCodexModels),
     claudeAgent: getAppModelOptions("claudeAgent", settings.customClaudeModels),
   };
+}
+
+function formatOutgoingPrompt(params: {
+  provider: ProviderKind;
+  model: string | null;
+  effort: string | null;
+  text: string;
+}): string {
+  const caps = getModelCapabilities(params.provider, params.model);
+  if (params.effort && caps.promptInjectedEffortLevels.includes(params.effort)) {
+    return applyClaudePromptEffortPrefix(params.text, params.effort as ClaudeReasoningEffort);
+  }
+  return params.text;
 }
 
 function isProviderBuildEnabled(provider: ProviderKind, featureFlags: ServerFeatureFlags): boolean {
@@ -549,8 +560,9 @@ export default function ChatView({ threadId }: ChatViewProps) {
   const setComposerDraftInteractionMode = useComposerDraftStore(
     (store) => store.setInteractionMode,
   );
-  const setComposerDraftEffort = useComposerDraftStore((store) => store.setEffort);
-  const setComposerDraftCodexFastMode = useComposerDraftStore((store) => store.setCodexFastMode);
+  const setComposerDraftProviderModelOptions = useComposerDraftStore(
+    (store) => store.setProviderModelOptions,
+  );
   const addComposerDraftImage = useComposerDraftStore((store) => store.addImage);
   const addComposerDraftImages = useComposerDraftStore((store) => store.addImages);
   const removeComposerDraftImage = useComposerDraftStore((store) => store.removeImage);
@@ -786,26 +798,24 @@ export default function ChatView({ threadId }: ChatViewProps) {
       draftModel,
     ) as ModelSlug;
   }, [baseThreadModel, composerDraft.model, customModelsForSelectedProvider, selectedProvider]);
-  const reasoningOptions = useMemo(
-    () => (selectedProvider === "codex" ? (["low", "medium", "high", "xhigh"] as const) : []),
-    [selectedProvider],
+  const composerProviderState = useMemo(
+    () =>
+      getComposerProviderState({
+        provider: selectedProvider,
+        model: selectedModel,
+        prompt,
+        modelOptions: composerDraft.providerModelOptions,
+      }),
+    [composerDraft.providerModelOptions, prompt, selectedModel, selectedProvider],
   );
-  const selectedEffort =
-    selectedProvider === "codex"
-      ? (composerDraft.effort ?? getDefaultReasoningEffort("codex"))
-      : null;
-  const selectedCodexFastModeEnabled =
-    selectedProvider === "codex" ? composerDraft.codexFastMode : false;
-  const selectedModelOptionsForDispatch = useMemo(() => {
-    if (selectedProvider !== "codex") {
-      return undefined;
-    }
-    const codexOptions = {
-      ...(selectedEffort ? { reasoningEffort: selectedEffort } : {}),
-      ...(selectedCodexFastModeEnabled ? { fastMode: true } : {}),
-    };
-    return Object.keys(codexOptions).length > 0 ? { codex: codexOptions } : undefined;
-  }, [selectedCodexFastModeEnabled, selectedEffort, selectedProvider]);
+  const selectedPromptEffort = composerProviderState.promptEffort;
+  const selectedModelOptionsForDispatch = useMemo(
+    () =>
+      composerProviderState.modelOptionsForDispatch
+        ? { [selectedProvider]: composerProviderState.modelOptionsForDispatch }
+        : undefined,
+    [composerProviderState.modelOptionsForDispatch, selectedProvider],
+  );
   const providerOptionsForDispatch = useMemo(() => {
     return buildProviderStartOptionsForProvider(settings, selectedProvider);
   }, [selectedProvider, settings]);
@@ -2596,6 +2606,12 @@ export default function ChatView({ threadId }: ChatViewProps) {
       promptForSend,
       composerTerminalContextsSnapshot,
     );
+    const outgoingMessageText = formatOutgoingPrompt({
+      provider: selectedProvider,
+      model: selectedModel,
+      effort: selectedPromptEffort,
+      text: messageTextForSend || IMAGE_ONLY_BOOTSTRAP_PROMPT,
+    });
     const messageIdForSend = newMessageId();
     const messageCreatedAt = new Date().toISOString();
     const turnAttachmentsPromise = Promise.all(
@@ -2620,7 +2636,7 @@ export default function ChatView({ threadId }: ChatViewProps) {
       {
         id: messageIdForSend,
         role: "user",
-        text: messageTextForSend,
+        text: outgoingMessageText,
         ...(optimisticAttachments.length > 0 ? { attachments: optimisticAttachments } : {}),
         createdAt: messageCreatedAt,
         streaming: false,
@@ -3022,6 +3038,12 @@ export default function ChatView({ threadId }: ChatViewProps) {
       const threadIdForSend = activeThread.id;
       const messageIdForSend = newMessageId();
       const messageCreatedAt = new Date().toISOString();
+      const outgoingMessageText = formatOutgoingPrompt({
+        provider: selectedProvider,
+        model: selectedModel,
+        effort: selectedPromptEffort,
+        text: trimmed,
+      });
 
       sendInFlightRef.current = true;
       beginSendPhase("sending-turn");
@@ -3031,7 +3053,7 @@ export default function ChatView({ threadId }: ChatViewProps) {
         {
           id: messageIdForSend,
           role: "user",
-          text: trimmed,
+          text: outgoingMessageText,
           createdAt: messageCreatedAt,
           streaming: false,
         },
@@ -3105,6 +3127,7 @@ export default function ChatView({ threadId }: ChatViewProps) {
       resetSendPhase,
       runtimeMode,
       selectedModel,
+      selectedPromptEffort,
       selectedModelOptionsForDispatch,
       providerOptionsForDispatch,
       selectedProvider,
@@ -3139,6 +3162,12 @@ export default function ChatView({ threadId }: ChatViewProps) {
     const nextThreadId = newThreadId();
     const planMarkdown = activeProposedPlan.planMarkdown;
     const implementationPrompt = buildPlanImplementationPrompt(planMarkdown);
+    const outgoingImplementationPrompt = formatOutgoingPrompt({
+      provider: selectedProvider,
+      model: selectedModel,
+      effort: selectedPromptEffort,
+      text: implementationPrompt,
+    });
     const nextThreadTitle = truncateTitle(buildPlanImplementationThreadTitle(planMarkdown));
     const nextThreadModel: ModelSlug =
       selectedModel ||
@@ -3175,7 +3204,7 @@ export default function ChatView({ threadId }: ChatViewProps) {
           message: {
             messageId: newMessageId(),
             role: "user",
-            text: implementationPrompt,
+            text: outgoingImplementationPrompt,
             attachments: [],
           },
           provider: selectedProvider,
@@ -3235,6 +3264,7 @@ export default function ChatView({ threadId }: ChatViewProps) {
     resetSendPhase,
     runtimeMode,
     selectedModel,
+    selectedPromptEffort,
     selectedModelOptionsForDispatch,
     providerOptionsForDispatch,
     selectedProvider,
@@ -3266,20 +3296,37 @@ export default function ChatView({ threadId }: ChatViewProps) {
       settings,
     ],
   );
-  const onEffortSelect = useCallback(
-    (effort: CodexReasoningEffort) => {
-      setComposerDraftEffort(threadId, effort);
+  const onProviderTraitsModelOptionsChange = useCallback(
+    (providerModelOptions: ProviderModelOptions[ProviderKind] | undefined) => {
+      setComposerDraftProviderModelOptions(threadId, selectedProvider, providerModelOptions);
       scheduleComposerFocus();
     },
-    [scheduleComposerFocus, setComposerDraftEffort, threadId],
+    [scheduleComposerFocus, selectedProvider, setComposerDraftProviderModelOptions, threadId],
   );
-  const onCodexFastModeChange = useCallback(
-    (enabled: boolean) => {
-      setComposerDraftCodexFastMode(threadId, enabled);
+  const setPromptFromTraits = useCallback(
+    (nextPrompt: string) => {
+      setPrompt(nextPrompt);
       scheduleComposerFocus();
     },
-    [scheduleComposerFocus, setComposerDraftCodexFastMode, threadId],
+    [scheduleComposerFocus, setPrompt],
   );
+  const providerHasTraits = hasProviderTraits(selectedProvider, selectedModel);
+  const providerTraitsMenuContent = renderProviderTraitsMenuContent({
+    provider: selectedProvider,
+    model: selectedModel,
+    modelOptions: composerDraft.providerModelOptions?.[selectedProvider],
+    prompt,
+    onPromptChange: setPromptFromTraits,
+    onModelOptionsChange: onProviderTraitsModelOptionsChange,
+  });
+  const providerTraitsPicker = renderProviderTraitsPicker({
+    provider: selectedProvider,
+    model: selectedModel,
+    modelOptions: composerDraft.providerModelOptions?.[selectedProvider],
+    prompt,
+    onPromptChange: setPromptFromTraits,
+    onModelOptionsChange: onProviderTraitsModelOptionsChange,
+  });
   const onEnvModeChange = useCallback(
     (mode: DraftThreadEnvMode) => {
       if (isLocalDraftThread) {
@@ -3869,6 +3916,12 @@ export default function ChatView({ threadId }: ChatViewProps) {
                           lockedProvider={lockedProvider}
                           availableProviders={availableProviderOptions}
                           modelOptionsByProvider={modelOptionsByProvider}
+                          {...(composerProviderState.modelPickerIconClassName
+                            ? {
+                                activeProviderIconClassName:
+                                  composerProviderState.modelPickerIconClassName,
+                              }
+                            : {})}
                           onProviderModelChange={onProviderModelSelect}
                         />
                       </div>
@@ -3878,26 +3931,16 @@ export default function ChatView({ threadId }: ChatViewProps) {
                           activePlan={Boolean(activePlan || activeProposedPlan || planSidebarOpen)}
                           interactionMode={interactionMode}
                           planSidebarOpen={planSidebarOpen}
-                          selectedEffort={selectedEffort}
-                          selectedProvider={selectedProvider}
-                          selectedCodexFastModeEnabled={selectedCodexFastModeEnabled}
-                          reasoningOptions={reasoningOptions}
-                          onEffortSelect={onEffortSelect}
-                          onCodexFastModeChange={onCodexFastModeChange}
+                          hasTraits={providerHasTraits}
+                          traitsMenuContent={providerTraitsMenuContent}
                           onToggleInteractionMode={toggleInteractionMode}
                           onTogglePlanSidebar={togglePlanSidebar}
                         />
                       ) : (
                         <>
-                          {selectedProvider === "codex" && selectedEffort != null ? (
+                          {providerTraitsPicker ? (
                             <div className="hidden items-center rounded-full bg-muted/30 px-1 sm:flex">
-                              <CodexTraitsPicker
-                                effort={selectedEffort}
-                                fastModeEnabled={selectedCodexFastModeEnabled}
-                                options={reasoningOptions}
-                                onEffortChange={onEffortSelect}
-                                onFastModeChange={onCodexFastModeChange}
-                              />
+                              {providerTraitsPicker}
                             </div>
                           ) : null}
 
@@ -4214,85 +4257,5 @@ const ChatComposerDock = memo(function ChatComposerDock({
     <div className={cn("chat-shell-surface px-4 pt-3 sm:px-6", isGitRepo ? "pb-2" : "pb-4")}>
       {children}
     </div>
-  );
-});
-
-const CodexTraitsPicker = memo(function CodexTraitsPicker(props: {
-  effort: CodexReasoningEffort;
-  fastModeEnabled: boolean;
-  options: ReadonlyArray<CodexReasoningEffort>;
-  onEffortChange: (effort: CodexReasoningEffort) => void;
-  onFastModeChange: (enabled: boolean) => void;
-}) {
-  const [isMenuOpen, setIsMenuOpen] = useState(false);
-  const defaultReasoningEffort = getDefaultReasoningEffort("codex");
-  const reasoningLabelByOption: Record<CodexReasoningEffort, string> = {
-    low: "Low",
-    medium: "Medium",
-    high: "High",
-    xhigh: "Extra High",
-  };
-  const triggerLabel = [
-    reasoningLabelByOption[props.effort],
-    ...(props.fastModeEnabled ? ["Fast"] : []),
-  ]
-    .filter(Boolean)
-    .join(" · ");
-
-  return (
-    <Menu
-      open={isMenuOpen}
-      onOpenChange={(open) => {
-        setIsMenuOpen(open);
-      }}
-    >
-      <MenuTrigger
-        render={
-          <Button
-            size="sm"
-            variant="ghost"
-            className="shrink-0 whitespace-nowrap px-2 text-muted-foreground/70 hover:text-foreground/80 sm:px-3"
-          />
-        }
-      >
-        <BrainIcon aria-hidden="true" className="size-4 shrink-0 text-muted-foreground/70" />
-        <span>{triggerLabel}</span>
-        <ChevronDownIcon aria-hidden="true" className="size-3 opacity-60" />
-      </MenuTrigger>
-      <MenuPopup align="start">
-        <MenuGroup>
-          <div className="px-2 py-1.5 font-medium text-muted-foreground text-xs">Reasoning</div>
-          <MenuRadioGroup
-            value={props.effort}
-            onValueChange={(value) => {
-              if (!value) return;
-              const nextEffort = props.options.find((option) => option === value);
-              if (!nextEffort) return;
-              props.onEffortChange(nextEffort);
-            }}
-          >
-            {props.options.map((effort) => (
-              <MenuRadioItem key={effort} value={effort}>
-                {reasoningLabelByOption[effort]}
-                {effort === defaultReasoningEffort ? " (default)" : ""}
-              </MenuRadioItem>
-            ))}
-          </MenuRadioGroup>
-        </MenuGroup>
-        <MenuDivider />
-        <MenuGroup>
-          <div className="px-2 py-1.5 font-medium text-muted-foreground text-xs">Fast Mode</div>
-          <MenuRadioGroup
-            value={props.fastModeEnabled ? "on" : "off"}
-            onValueChange={(value) => {
-              props.onFastModeChange(value === "on");
-            }}
-          >
-            <MenuRadioItem value="off">off</MenuRadioItem>
-            <MenuRadioItem value="on">on</MenuRadioItem>
-          </MenuRadioGroup>
-        </MenuGroup>
-      </MenuPopup>
-    </Menu>
   );
 });

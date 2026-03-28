@@ -8,6 +8,7 @@ import {
   type Query as ClaudeQuery,
   type SDKMessage,
   type SDKResultMessage,
+  type SDKUserMessage,
 } from "@anthropic-ai/claude-agent-sdk";
 import {
   ApprovalRequestId,
@@ -17,16 +18,19 @@ import {
   type ProviderRuntimeEvent,
   RuntimeItemId,
   RuntimeRequestId,
+  type ProviderSendTurnInput,
   type ProviderSession,
   type ProviderSessionStartInput,
   type ProviderUserInputAnswers,
   ThreadId,
   TurnId,
+  type UserInputQuestion,
 } from "@ocicode/contracts";
 import { getDefaultModel, normalizeModelSlug } from "@ocicode/shared/model";
 import { normalizeRemoteBridgeStartInput } from "@ocicode/shared/provider";
-import { Effect, Layer, Queue, Schema, Stream } from "effect";
+import { Effect, FileSystem, Layer, Queue, Schema, Stream } from "effect";
 
+import { resolveAttachmentPath } from "../../attachmentStore.ts";
 import { ServerConfig } from "../../config.ts";
 import {
   ProviderAdapterProcessError,
@@ -37,6 +41,13 @@ import {
 } from "../Errors.ts";
 import { type ProviderToolHostShape, ProviderToolHost } from "../Services/ProviderToolHost.ts";
 import { type ClaudeAdapterShape, ClaudeAdapter } from "../Services/ClaudeAdapter.ts";
+import {
+  buildClaudePromptText,
+  CLAUDE_CONTEXT_1M_BETA,
+  getClaudeModelCapabilities,
+  normalizeClaudeModelOptions,
+  SUPPORTED_CLAUDE_IMAGE_MIME_TYPES,
+} from "../claudeSupport.ts";
 import {
   getRemoteProviderBridgeClient,
   remoteProviderBridgeReadThread,
@@ -78,6 +89,12 @@ type PendingApproval = {
   readonly resolve: (decision: ProviderApprovalDecision) => void;
 };
 
+type PendingUserInput = {
+  readonly requestId: ApprovalRequestId;
+  readonly questions: ReadonlyArray<UserInputQuestion>;
+  readonly resolve: (answers: ProviderUserInputAnswers) => void;
+};
+
 type ClaudeTurnSnapshot = {
   readonly id: TurnId;
   readonly items: Array<unknown>;
@@ -88,6 +105,7 @@ type ClaudeSessionContext = {
   session: ProviderSession;
   turns: Array<ClaudeTurnSnapshot>;
   pendingApprovals: Map<ApprovalRequestId, PendingApproval>;
+  pendingUserInputs: Map<ApprovalRequestId, PendingUserInput>;
   resumeSessionId: string | undefined;
   resumeSessionAt: string | undefined;
   activeQuery: ClaudeQuery | undefined;
@@ -99,11 +117,24 @@ type LocalClaudeRuntime = {
   readonly localSessions: Map<ThreadId, ClaudeSessionContext>;
   readonly runtimeEventQueue: Queue.Queue<ProviderRuntimeEvent>;
   readonly providerToolHost: ProviderToolHostShape;
+  readonly fileSystem: FileSystem.FileSystem;
   readonly serverConfig: {
     readonly port: number;
     readonly cwd: string;
+    readonly stateDir: string;
   };
+  readonly createQuery: (input: {
+    readonly prompt: string | AsyncIterable<SDKUserMessage>;
+    readonly options: ClaudeQueryOptions;
+  }) => ClaudeQuery;
 };
+
+export interface ClaudeAdapterLiveOptions {
+  readonly createQuery?: (input: {
+    readonly prompt: string | AsyncIterable<SDKUserMessage>;
+    readonly options: ClaudeQueryOptions;
+  }) => ClaudeQuery;
+}
 
 function toMessage(cause: unknown, fallback: string): string {
   if (cause instanceof Error && cause.message.length > 0) {
@@ -253,6 +284,63 @@ function toolRequestType(toolName: string): CanonicalRequestType {
   return "unknown";
 }
 
+function isAskUserQuestionTool(toolName: string): boolean {
+  const normalized = toolName.trim().toLowerCase();
+  return (
+    normalized === "askuserquestion" ||
+    normalized === "ask_user_question" ||
+    normalized.includes("askuserquestion")
+  );
+}
+
+function parseClaudeUserInputQuestions(
+  toolInput: Record<string, unknown>,
+): Array<UserInputQuestion> {
+  const rawQuestions = Array.isArray(toolInput.questions) ? toolInput.questions : [];
+  const parsedQuestions: Array<UserInputQuestion> = [];
+
+  for (const [index, entry] of rawQuestions.entries()) {
+    if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
+      continue;
+    }
+
+    const question = entry as Record<string, unknown>;
+    const id = typeof question.id === "string" ? question.id.trim() : "";
+    const header = typeof question.header === "string" ? question.header.trim() : "";
+    const prompt = typeof question.question === "string" ? question.question.trim() : "";
+    const options: Array<{ label: string; description: string }> = [];
+
+    if (Array.isArray(question.options)) {
+      for (const option of question.options) {
+        if (!option || typeof option !== "object" || Array.isArray(option)) {
+          continue;
+        }
+
+        const record = option as Record<string, unknown>;
+        const label = typeof record.label === "string" ? record.label.trim() : "";
+        const description = typeof record.description === "string" ? record.description.trim() : "";
+        if (!label || !description) {
+          continue;
+        }
+        options.push({ label, description });
+      }
+    }
+
+    if (!prompt || options.length === 0) {
+      continue;
+    }
+
+    parsedQuestions.push({
+      id: id || `question-${index + 1}`,
+      header: header || `Question ${index + 1}`,
+      question: prompt,
+      options,
+    });
+  }
+
+  return parsedQuestions;
+}
+
 function toolRequestDetail(toolName: string, input: Record<string, unknown>): string | undefined {
   const path =
     typeof input.file_path === "string"
@@ -268,16 +356,6 @@ function toolRequestDetail(toolName: string, input: Record<string, unknown>): st
   }
   const serialized = JSON.stringify(input);
   return serialized === "{}" ? toolName : `${toolName}: ${serialized}`;
-}
-
-function promptWithEffort(input: {
-  readonly prompt: string;
-  readonly effort: string | undefined;
-}): string {
-  if (!input.effort) {
-    return input.prompt;
-  }
-  return `Reasoning effort: ${input.effort}.\n\n${input.prompt}`;
 }
 
 function isInterruptedResult(result: SDKResultMessage): boolean {
@@ -369,9 +447,131 @@ function buildWorkspaceProxyConfig(input: {
   };
 }
 
+function buildClaudeImageContentBlock(input: {
+  readonly mimeType: string;
+  readonly bytes: Uint8Array;
+}): Record<string, unknown> {
+  return {
+    type: "image",
+    source: {
+      type: "base64",
+      media_type: input.mimeType,
+      data: Buffer.from(input.bytes).toString("base64"),
+    },
+  };
+}
+
+function buildPromptSummary(input: {
+  readonly promptText: string;
+  readonly attachmentCount: number;
+}): string {
+  if (input.promptText.length > 0) {
+    return input.promptText;
+  }
+  if (input.attachmentCount === 1) {
+    return "[1 image attachment]";
+  }
+  return `[${input.attachmentCount} image attachments]`;
+}
+
+const buildUserMessageEffect = Effect.fn(function* (
+  input: ProviderSendTurnInput,
+  dependencies: {
+    readonly fileSystem: FileSystem.FileSystem;
+    readonly stateDir: string;
+  },
+) {
+  const promptText = buildClaudePromptText({
+    text: input.input?.trim() ?? "",
+    model: input.model,
+    modelOptions: input.modelOptions?.claudeAgent,
+  });
+  const sdkContent: Array<Record<string, unknown>> = [];
+
+  if (promptText.length > 0) {
+    sdkContent.push({ type: "text", text: promptText });
+  }
+
+  for (const attachment of input.attachments ?? []) {
+    if (attachment.type !== "image") {
+      continue;
+    }
+
+    if (!SUPPORTED_CLAUDE_IMAGE_MIME_TYPES.has(attachment.mimeType)) {
+      return yield* new ProviderAdapterRequestError({
+        provider: PROVIDER,
+        method: "turn/start",
+        detail: `Unsupported Claude image attachment type '${attachment.mimeType}'.`,
+      });
+    }
+
+    const attachmentPath = resolveAttachmentPath({
+      stateDir: dependencies.stateDir,
+      attachment,
+    });
+    if (!attachmentPath) {
+      return yield* new ProviderAdapterRequestError({
+        provider: PROVIDER,
+        method: "turn/start",
+        detail: `Invalid attachment id '${attachment.id}'.`,
+      });
+    }
+
+    const bytes = yield* dependencies.fileSystem.readFile(attachmentPath).pipe(
+      Effect.mapError(
+        (cause) =>
+          new ProviderAdapterRequestError({
+            provider: PROVIDER,
+            method: "turn/start",
+            detail: toMessage(cause, "Failed to read Claude image attachment."),
+            cause,
+          }),
+      ),
+    );
+
+    sdkContent.push(
+      buildClaudeImageContentBlock({
+        mimeType: attachment.mimeType,
+        bytes,
+      }),
+    );
+  }
+
+  if (sdkContent.length === 0) {
+    return yield* new ProviderAdapterValidationError({
+      provider: PROVIDER,
+      operation: "sendTurn",
+      issue: "Claude turns require a non-empty input message or at least one image attachment.",
+    });
+  }
+
+  const promptSummary = buildPromptSummary({
+    promptText,
+    attachmentCount: (input.attachments ?? []).length,
+  });
+
+  return {
+    promptSummary,
+    promptSource: {
+      async *[Symbol.asyncIterator]() {
+        yield {
+          type: "user",
+          session_id: "",
+          parent_tool_use_id: null,
+          message: {
+            role: "user",
+            content: sdkContent,
+          },
+        } as unknown as SDKUserMessage;
+      },
+    } satisfies AsyncIterable<SDKUserMessage>,
+  };
+});
+
 function buildClaudeQueryOptions(input: {
   readonly context: ClaudeSessionContext;
   readonly model: string;
+  readonly modelOptions?: ProviderSendTurnInput["modelOptions"];
   readonly binaryPath?: string;
   readonly canUseTool?: CanUseTool;
   readonly interactionMode?: "default" | "plan";
@@ -382,6 +582,16 @@ function buildClaudeQueryOptions(input: {
       : input.context.workspaceProxy || input.context.session.runtimeMode === "full-access"
         ? "bypassPermissions"
         : "default";
+  const normalizedModelOptions = normalizeClaudeModelOptions(
+    input.model,
+    input.modelOptions?.claudeAgent,
+  );
+  const caps = getClaudeModelCapabilities(input.model);
+  const resolvedEffort = normalizedModelOptions?.effort;
+  const apiEffort =
+    resolvedEffort && !caps.promptInjectedEffortLevels.includes(resolvedEffort)
+      ? (resolvedEffort as Exclude<typeof resolvedEffort, "ultrathink">)
+      : undefined;
 
   return {
     model: input.model,
@@ -392,6 +602,11 @@ function buildClaudeQueryOptions(input: {
     ...(input.context.resumeSessionId ? { resume: input.context.resumeSessionId } : {}),
     ...(input.context.resumeSessionAt ? { resumeSessionAt: input.context.resumeSessionAt } : {}),
     ...(input.canUseTool ? { canUseTool: input.canUseTool } : {}),
+    ...(normalizedModelOptions?.thinking === false
+      ? { thinking: { type: "disabled" as const } }
+      : {}),
+    ...(apiEffort ? { effort: apiEffort } : {}),
+    ...(normalizedModelOptions?.contextWindow === "1m" ? { betas: [CLAUDE_CONTEXT_1M_BETA] } : {}),
     ...(input.context.workspaceProxy
       ? {
           tools: [],
@@ -422,7 +637,81 @@ function buildCanUseTool(input: {
   readonly turnId: TurnId;
   readonly runtimeEventQueue: Queue.Queue<ProviderRuntimeEvent>;
 }): CanUseTool {
-  return async (toolName, toolInput) => {
+  return async (toolName, toolInput, callbackOptions) => {
+    if (isAskUserQuestionTool(toolName)) {
+      const questions = parseClaudeUserInputQuestions(toolInput);
+      if (questions.length === 0) {
+        return {
+          behavior: "deny",
+          message: "Claude requested user input with no valid questions.",
+        } satisfies PermissionResult;
+      }
+
+      const requestId = ApprovalRequestId.makeUnsafe(crypto.randomUUID());
+      const answers = new Promise<ProviderUserInputAnswers>((resolve) => {
+        input.context.pendingUserInputs.set(requestId, {
+          requestId,
+          questions,
+          resolve,
+        });
+      });
+
+      emitRuntimeEvent(input.runtimeEventQueue, {
+        ...providerEventBase(input.context, { turnId: input.turnId }),
+        requestId: RuntimeRequestId.makeUnsafe(requestId),
+        type: "user-input.requested",
+        payload: {
+          questions,
+        },
+      });
+
+      const abortSignal = callbackOptions?.signal;
+      let aborted = false;
+      const onAbort = () => {
+        const pending = input.context.pendingUserInputs.get(requestId);
+        if (!pending) {
+          return;
+        }
+        aborted = true;
+        input.context.pendingUserInputs.delete(requestId);
+        pending.resolve({});
+      };
+      abortSignal?.addEventListener("abort", onAbort, { once: true });
+
+      const resolvedAnswers = await answers;
+      abortSignal?.removeEventListener("abort", onAbort);
+      input.context.pendingUserInputs.delete(requestId);
+
+      emitRuntimeEvent(input.runtimeEventQueue, {
+        ...providerEventBase(input.context, { turnId: input.turnId }),
+        requestId: RuntimeRequestId.makeUnsafe(requestId),
+        type: "user-input.resolved",
+        payload: {
+          answers: resolvedAnswers,
+        },
+      });
+
+      if (aborted || abortSignal?.aborted) {
+        return {
+          behavior: "deny",
+          message: "User cancelled tool execution.",
+          interrupt: true,
+        } satisfies PermissionResult;
+      }
+
+      return {
+        behavior: "allow",
+        updatedInput: {
+          ...toolInput,
+          answers: resolvedAnswers,
+        },
+      } satisfies PermissionResult;
+    }
+
+    if (input.context.session.runtimeMode !== "approval-required") {
+      return { behavior: "allow" } satisfies PermissionResult;
+    }
+
     const requestId = ApprovalRequestId.makeUnsafe(crypto.randomUUID());
     const requestType = toolRequestType(toolName);
     const detail = toolRequestDetail(toolName, toolInput);
@@ -484,24 +773,26 @@ async function runLocalClaudeTurn(input: {
   readonly runtime: LocalClaudeRuntime;
   readonly context: ClaudeSessionContext;
   readonly turn: ClaudeTurnSnapshot;
-  readonly prompt: string;
+  readonly promptSummary: string;
+  readonly promptSource: string | AsyncIterable<SDKUserMessage>;
   readonly model: string;
+  readonly modelOptions?: ProviderSendTurnInput["modelOptions"];
   readonly binaryPath?: string;
   readonly interactionMode?: "default" | "plan";
 }): Promise<void> {
   const assistantItemId = RuntimeItemId.makeUnsafe(crypto.randomUUID());
-  const canUseTool =
-    !input.context.workspaceProxy && input.context.session.runtimeMode === "approval-required"
-      ? buildCanUseTool({
-          context: input.context,
-          turnId: input.turn.id,
-          runtimeEventQueue: input.runtime.runtimeEventQueue,
-        })
-      : undefined;
+  const canUseTool = !input.context.workspaceProxy
+    ? buildCanUseTool({
+        context: input.context,
+        turnId: input.turn.id,
+        runtimeEventQueue: input.runtime.runtimeEventQueue,
+      })
+    : undefined;
 
   const queryOptions = buildClaudeQueryOptions({
     context: input.context,
     model: input.model,
+    ...(input.modelOptions ? { modelOptions: input.modelOptions } : {}),
     ...(input.binaryPath ? { binaryPath: input.binaryPath } : {}),
     ...(canUseTool ? { canUseTool } : {}),
     ...(input.interactionMode ? { interactionMode: input.interactionMode } : {}),
@@ -521,16 +812,16 @@ async function runLocalClaudeTurn(input: {
       itemType: "user_message",
       status: "completed",
       title: "User message",
-      detail: input.prompt,
+      detail: input.promptSummary,
       data: {
-        text: input.prompt,
+        text: input.promptSummary,
       },
     },
   });
 
   try {
-    const currentQuery = query({
-      prompt: input.prompt,
+    const currentQuery = input.runtime.createQuery({
+      prompt: input.promptSource,
       options: queryOptions,
     });
     input.context.activeQuery = currentQuery;
@@ -654,16 +945,32 @@ async function runLocalClaudeTurn(input: {
     input.context.session = {
       ...input.context.session,
       status:
-        resultMessage && (resultMessage.is_error || isInterruptedResult(resultMessage))
+        resultMessage && resultMessage.is_error && !isInterruptedResult(resultMessage)
           ? "error"
           : "ready",
       activeTurnId: undefined,
       updatedAt: new Date().toISOString(),
-      ...(resultMessage && resultMessage.is_error
+      ...(resultMessage && resultMessage.is_error && !isInterruptedResult(resultMessage)
         ? { lastError: resultErrorMessage(resultMessage) ?? input.context.session.lastError }
         : {}),
     };
     refreshResumeCursor(input.context);
+    emitRuntimeEvent(runtimeEvents, {
+      ...providerEventBase(input.context, { turnId: input.turn.id }),
+      type: "session.state.changed",
+      payload: {
+        state: "ready",
+      },
+    });
+    if (resultMessage?.usage) {
+      emitRuntimeEvent(runtimeEvents, {
+        ...providerEventBase(input.context, { turnId: input.turn.id }),
+        type: "thread.token-usage.updated",
+        payload: {
+          usage: resultMessage.usage,
+        },
+      });
+    }
 
     emitRuntimeEvent(runtimeEvents, {
       ...providerEventBase(input.context, { turnId: input.turn.id }),
@@ -717,9 +1024,10 @@ async function runLocalClaudeTurn(input: {
   }
 }
 
-const makeClaudeAdapter = () =>
+const makeClaudeAdapter = (options?: ClaudeAdapterLiveOptions) =>
   Effect.gen(function* () {
     const providerToolHost = yield* ProviderToolHost;
+    const fileSystem = yield* FileSystem.FileSystem;
     const serverConfig = yield* ServerConfig;
 
     const localSessions = new Map<ThreadId, ClaudeSessionContext>();
@@ -732,7 +1040,9 @@ const makeClaudeAdapter = () =>
       localSessions,
       runtimeEventQueue,
       providerToolHost,
+      fileSystem,
       serverConfig,
+      createQuery: options?.createQuery ?? ((input) => query(input)),
     };
 
     const subscribeToRemoteBridge = (bridge: RemoteBridgeConfig) => {
@@ -920,6 +1230,7 @@ const makeClaudeAdapter = () =>
           session,
           turns: [],
           pendingApprovals: new Map(),
+          pendingUserInputs: new Map(),
           resumeSessionId: resumeState.resume,
           resumeSessionAt: resumeState.resumeSessionAt,
           activeQuery: undefined,
@@ -933,6 +1244,18 @@ const makeClaudeAdapter = () =>
           ...providerEventBase(context),
           type: "session.started",
           payload: input.resumeCursor !== undefined ? { resume: input.resumeCursor } : {},
+        });
+        emitRuntimeEvent(runtimeEventQueue, {
+          ...providerEventBase(context),
+          type: "session.configured",
+          payload: {
+            config: {
+              model: session.model,
+              cwd: session.cwd,
+              executionMode: "local",
+              ...(workspaceProxy ? { workspaceProxyMode: workspaceProxy.mode } : {}),
+            },
+          },
         });
         emitRuntimeEvent(runtimeEventQueue, {
           ...providerEventBase(context),
@@ -974,29 +1297,16 @@ const makeClaudeAdapter = () =>
             detail: "Claude is already processing a turn for this thread.",
           });
         }
-        if (input.attachments && input.attachments.length > 0) {
-          return yield* new ProviderAdapterValidationError({
-            provider: PROVIDER,
-            operation: "sendTurn",
-            issue: "Claude image attachments are not supported in this implementation yet.",
-          });
-        }
-        if (!input.input || input.input.trim().length === 0) {
-          return yield* new ProviderAdapterValidationError({
-            provider: PROVIDER,
-            operation: "sendTurn",
-            issue: "Claude turns require a non-empty input message.",
-          });
-        }
+
+        const builtUserMessage = yield* buildUserMessageEffect(input, {
+          fileSystem: localRuntime.fileSystem,
+          stateDir: localRuntime.serverConfig.stateDir,
+        });
 
         const turnId = TurnId.makeUnsafe(crypto.randomUUID());
-        const prompt = promptWithEffort({
-          prompt: input.input.trim(),
-          effort: input.modelOptions?.claudeAgent?.effort,
-        });
         const turn: ClaudeTurnSnapshot = {
           id: turnId,
-          items: [{ type: "user", text: prompt }],
+          items: [{ type: "user", text: builtUserMessage.promptSummary }],
         };
         context.turns.push(turn);
         context.session = {
@@ -1028,8 +1338,10 @@ const makeClaudeAdapter = () =>
           runtime: localRuntime,
           context,
           turn,
-          prompt,
+          promptSummary: builtUserMessage.promptSummary,
+          promptSource: builtUserMessage.promptSource,
           model,
+          ...(input.modelOptions ? { modelOptions: input.modelOptions } : {}),
           ...(context.binaryPath ? { binaryPath: context.binaryPath } : {}),
           ...(input.interactionMode ? { interactionMode: input.interactionMode } : {}),
         });
@@ -1106,7 +1418,7 @@ const makeClaudeAdapter = () =>
     const respondToUserInput: ClaudeAdapterShape["respondToUserInput"] = (
       threadId,
       requestId,
-      _answers,
+      answers,
     ) =>
       Effect.gen(function* () {
         const remoteBridge = remoteSessionBridgeByThreadId.get(threadId);
@@ -1115,17 +1427,23 @@ const makeClaudeAdapter = () =>
             remoteBridge,
             threadId,
             "providerBridge.respondToUserInput",
-            { threadId, requestId, answers: {} satisfies ProviderUserInputAnswers },
+            { threadId, requestId, answers },
             Schema.decodeUnknownSync(Schema.Unknown),
           );
           return;
         }
 
-        return yield* new ProviderAdapterRequestError({
-          provider: PROVIDER,
-          method: "item/tool/requestUserInput",
-          detail: "Claude local user-input prompts are not implemented in this adapter.",
-        });
+        const context = yield* requireLocalSessionEffect(localSessions, threadId);
+        const pending = context.pendingUserInputs.get(requestId);
+        if (!pending) {
+          return yield* new ProviderAdapterRequestError({
+            provider: PROVIDER,
+            method: "item/tool/respondToUserInput",
+            detail: `Unknown pending Claude user-input request: ${requestId}`,
+          });
+        }
+        context.pendingUserInputs.delete(requestId);
+        pending.resolve(answers);
       });
 
     const stopSession: ClaudeAdapterShape["stopSession"] = (threadId) =>
@@ -1159,6 +1477,10 @@ const makeClaudeAdapter = () =>
           pending.resolve("cancel");
         }
         context.pendingApprovals.clear();
+        for (const pending of context.pendingUserInputs.values()) {
+          pending.resolve({});
+        }
+        context.pendingUserInputs.clear();
         context.session = {
           ...context.session,
           status: "closed",
@@ -1300,6 +1622,6 @@ const makeClaudeAdapter = () =>
 
 export const ClaudeAdapterLive = Layer.effect(ClaudeAdapter, makeClaudeAdapter());
 
-export function makeClaudeAdapterLive() {
-  return Layer.effect(ClaudeAdapter, makeClaudeAdapter());
+export function makeClaudeAdapterLive(options?: ClaudeAdapterLiveOptions) {
+  return Layer.effect(ClaudeAdapter, makeClaudeAdapter(options));
 }

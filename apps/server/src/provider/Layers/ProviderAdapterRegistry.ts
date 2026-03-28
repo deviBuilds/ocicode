@@ -20,15 +20,19 @@ import { CodexAdapter } from "../Services/CodexAdapter.ts";
 
 export interface ProviderAdapterRegistryLiveOptions {
   readonly adapters?: ReadonlyArray<ProviderAdapterShape<ProviderAdapterError>>;
+  readonly includeClaudeAdapter?: boolean;
 }
 
 const makeProviderAdapterRegistry = (options?: ProviderAdapterRegistryLiveOptions) =>
   Effect.gen(function* () {
-    const adapters =
+    const resolvedAdapters =
       options?.adapters !== undefined
         ? options.adapters
-        : [yield* CodexAdapter, yield* ClaudeAdapter];
-    const byProvider = new Map(adapters.map((adapter) => [adapter.provider, adapter]));
+        : [
+            yield* CodexAdapter,
+            ...(options?.includeClaudeAdapter === false ? [] : [yield* ClaudeAdapter]),
+          ];
+    const byProvider = new Map(resolvedAdapters.map((adapter) => [adapter.provider, adapter]));
 
     const getByProvider: ProviderAdapterRegistryShape["getByProvider"] = (provider) => {
       const adapter = byProvider.get(provider);
@@ -52,6 +56,15 @@ export const ProviderAdapterRegistryLive = Layer.effect(
   makeProviderAdapterRegistry(),
 );
 
+export function makeProviderAdapterRegistryLive(options: {
+  readonly adapters: ReadonlyArray<ProviderAdapterShape<ProviderAdapterError>>;
+}): Layer.Layer<ProviderAdapterRegistry, never, never>;
+export function makeProviderAdapterRegistryLive(options: {
+  readonly includeClaudeAdapter: false;
+}): Layer.Layer<ProviderAdapterRegistry, never, CodexAdapter>;
+export function makeProviderAdapterRegistryLive(
+  options?: ProviderAdapterRegistryLiveOptions,
+): Layer.Layer<ProviderAdapterRegistry, never, CodexAdapter | ClaudeAdapter>;
 export function makeProviderAdapterRegistryLive(options?: ProviderAdapterRegistryLiveOptions) {
   return Layer.effect(ProviderAdapterRegistry, makeProviderAdapterRegistry(options));
 }

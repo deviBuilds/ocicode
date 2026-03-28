@@ -18,9 +18,8 @@ import { OrchestrationProjectionPipelineLive } from "./orchestration/Layers/Proj
 import { OrchestrationProjectionSnapshotQueryLive } from "./orchestration/Layers/ProjectionSnapshotQuery";
 import { ProviderRuntimeIngestionLive } from "./orchestration/Layers/ProviderRuntimeIngestion";
 import { ProviderUnsupportedError } from "./provider/Errors";
-import { makeClaudeAdapterLive } from "./provider/Layers/ClaudeAdapter";
 import { makeCodexAdapterLive } from "./provider/Layers/CodexAdapter";
-import { ProviderAdapterRegistryLive } from "./provider/Layers/ProviderAdapterRegistry";
+import { makeProviderAdapterRegistryLive } from "./provider/Layers/ProviderAdapterRegistry";
 import { makeProviderServiceLive } from "./provider/Layers/ProviderService";
 import { ProviderSessionDirectoryLive } from "./provider/Layers/ProviderSessionDirectory";
 import { ProviderToolHostLive } from "./provider/Layers/ProviderToolHost";
@@ -60,7 +59,7 @@ export function makeServerProviderLayer(): Layer.Layer<
   SqlClient.SqlClient | ServerConfig | FileSystem.FileSystem
 > {
   return Effect.gen(function* () {
-    const { stateDir } = yield* ServerConfig;
+    const { enableClaudeProvider, stateDir } = yield* ServerConfig;
     const providerLogsDir = path.join(stateDir, "logs", "provider");
     const providerEventLogPath = path.join(providerLogsDir, "events.log");
     const nativeEventLogger = yield* makeEventNdjsonLogger(providerEventLogPath, {
@@ -76,13 +75,21 @@ export function makeServerProviderLayer(): Layer.Layer<
     const codexAdapterLayer = makeCodexAdapterLive(
       nativeEventLogger ? { nativeEventLogger } : undefined,
     );
-    const claudeAdapterLayer = makeClaudeAdapterLive();
-    const adapterRegistryLayer = ProviderAdapterRegistryLive.pipe(
-      Layer.provide(codexAdapterLayer),
-      Layer.provide(claudeAdapterLayer),
-      Layer.provideMerge(providerToolHostLayer),
-      Layer.provideMerge(providerSessionDirectoryLayer),
-    );
+    const adapterRegistryLayer = enableClaudeProvider
+      ? makeProviderAdapterRegistryLive({ includeClaudeAdapter: true }).pipe(
+          Layer.provide(codexAdapterLayer),
+          Layer.provide(
+            yield* Effect.promise(() =>
+              import("./provider/Layers/ClaudeAdapter").then((module) =>
+                module.makeClaudeAdapterLive(),
+              ),
+            ),
+          ),
+          Layer.provide(providerToolHostLayer),
+        )
+      : makeProviderAdapterRegistryLive({ includeClaudeAdapter: false }).pipe(
+          Layer.provide(codexAdapterLayer),
+        );
     const providerServiceLayer = makeProviderServiceLive(
       canonicalEventLogger ? { canonicalEventLogger } : undefined,
     ).pipe(

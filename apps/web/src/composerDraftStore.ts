@@ -1,15 +1,14 @@
 import {
-  DEFAULT_REASONING_EFFORT_BY_PROVIDER,
   ProjectId,
-  REASONING_EFFORT_OPTIONS_BY_PROVIDER,
   ThreadId,
   type CodexReasoningEffort,
   type ProviderKind,
   type ProviderInteractionMode,
+  type ProviderModelOptions,
   type RuntimeMode,
 } from "@ocicode/contracts";
 import { makeStorageKey } from "@ocicode/shared/branding";
-import { normalizeModelSlug } from "@ocicode/shared/model";
+import { getDefaultReasoningEffort, normalizeModelSlug, trimOrNull } from "@ocicode/shared/model";
 import { DEFAULT_INTERACTION_MODE, DEFAULT_RUNTIME_MODE, type ChatImageAttachment } from "./types";
 import {
   ensureInlineTerminalContextPlaceholders,
@@ -95,8 +94,7 @@ interface PersistedComposerThreadDraftState {
   model?: string | null;
   runtimeMode?: RuntimeMode | null;
   interactionMode?: ProviderInteractionMode | null;
-  effort?: CodexReasoningEffort | null;
-  codexFastMode?: boolean | null;
+  providerModelOptions?: ProviderModelOptions | null;
   serviceTier?: string | null;
 }
 
@@ -126,8 +124,7 @@ interface ComposerThreadDraftState {
   model: string | null;
   runtimeMode: RuntimeMode | null;
   interactionMode: ProviderInteractionMode | null;
-  effort: CodexReasoningEffort | null;
-  codexFastMode: boolean;
+  providerModelOptions: ProviderModelOptions | null;
 }
 
 export interface DraftThreadState {
@@ -186,6 +183,11 @@ interface ComposerDraftStoreState {
     threadId: ThreadId,
     interactionMode: ProviderInteractionMode | null | undefined,
   ) => void;
+  setProviderModelOptions: (
+    threadId: ThreadId,
+    provider: ProviderKind,
+    providerModelOptions: ProviderModelOptions[ProviderKind] | null | undefined,
+  ) => void;
   setEffort: (threadId: ThreadId, effort: CodexReasoningEffort | null | undefined) => void;
   setCodexFastMode: (threadId: ThreadId, enabled: boolean | null | undefined) => void;
   addImage: (threadId: ThreadId, image: ComposerImageAttachment) => void;
@@ -234,13 +236,8 @@ const EMPTY_THREAD_DRAFT = Object.freeze({
   model: null,
   runtimeMode: null,
   interactionMode: null,
-  effort: null,
-  codexFastMode: false,
+  providerModelOptions: null,
 }) as ComposerThreadDraftState;
-
-const REASONING_EFFORT_VALUES = new Set<CodexReasoningEffort>(
-  REASONING_EFFORT_OPTIONS_BY_PROVIDER.codex,
-);
 
 function createEmptyThreadDraft(): ComposerThreadDraftState {
   return {
@@ -253,8 +250,7 @@ function createEmptyThreadDraft(): ComposerThreadDraftState {
     model: null,
     runtimeMode: null,
     interactionMode: null,
-    effort: null,
-    codexFastMode: false,
+    providerModelOptions: null,
   };
 }
 
@@ -325,13 +321,127 @@ function shouldRemoveDraft(draft: ComposerThreadDraftState): boolean {
     draft.model === null &&
     draft.runtimeMode === null &&
     draft.interactionMode === null &&
-    draft.effort === null &&
-    draft.codexFastMode === false
+    draft.providerModelOptions === null
   );
 }
 
 function normalizeProviderKind(value: unknown): ProviderKind | null {
   return value === "codex" || value === "claudeAgent" ? value : null;
+}
+
+function normalizeProviderModelOptions(
+  value: unknown,
+  legacy?: {
+    effort?: unknown;
+    codexFastMode?: unknown;
+    serviceTier?: unknown;
+  },
+): ProviderModelOptions | null {
+  const candidate = value && typeof value === "object" ? (value as Record<string, unknown>) : null;
+  const codexCandidate =
+    candidate?.codex && typeof candidate.codex === "object"
+      ? (candidate.codex as Record<string, unknown>)
+      : null;
+  const claudeCandidate =
+    candidate?.claudeAgent && typeof candidate.claudeAgent === "object"
+      ? (candidate.claudeAgent as Record<string, unknown>)
+      : null;
+
+  const codexReasoningEffort =
+    codexCandidate?.reasoningEffort === "low" ||
+    codexCandidate?.reasoningEffort === "medium" ||
+    codexCandidate?.reasoningEffort === "high" ||
+    codexCandidate?.reasoningEffort === "xhigh"
+      ? codexCandidate.reasoningEffort
+      : legacy?.effort === "low" ||
+          legacy?.effort === "medium" ||
+          legacy?.effort === "high" ||
+          legacy?.effort === "xhigh"
+        ? legacy.effort
+        : undefined;
+  const codexFastMode =
+    codexCandidate?.fastMode === true
+      ? true
+      : codexCandidate?.fastMode === false
+        ? false
+        : legacy?.codexFastMode === true ||
+            (typeof legacy?.serviceTier === "string" && legacy.serviceTier === "fast")
+          ? true
+          : undefined;
+
+  const claudeThinking =
+    claudeCandidate?.thinking === true
+      ? true
+      : claudeCandidate?.thinking === false
+        ? false
+        : undefined;
+  const claudeEffort =
+    claudeCandidate?.effort === "low" ||
+    claudeCandidate?.effort === "medium" ||
+    claudeCandidate?.effort === "high" ||
+    claudeCandidate?.effort === "max" ||
+    claudeCandidate?.effort === "ultrathink"
+      ? claudeCandidate.effort
+      : undefined;
+  const claudeFastMode =
+    claudeCandidate?.fastMode === true
+      ? true
+      : claudeCandidate?.fastMode === false
+        ? false
+        : undefined;
+  const claudeContextWindow = trimOrNull(
+    typeof claudeCandidate?.contextWindow === "string" ? claudeCandidate.contextWindow : null,
+  );
+
+  const normalized: ProviderModelOptions = {
+    ...(codexReasoningEffort !== undefined || codexFastMode !== undefined
+      ? {
+          codex: {
+            ...(codexReasoningEffort !== undefined
+              ? { reasoningEffort: codexReasoningEffort }
+              : {}),
+            ...(codexFastMode !== undefined ? { fastMode: codexFastMode } : {}),
+          },
+        }
+      : {}),
+    ...(claudeThinking !== undefined ||
+    claudeEffort !== undefined ||
+    claudeFastMode !== undefined ||
+    claudeContextWindow !== null
+      ? {
+          claudeAgent: {
+            ...(claudeThinking !== undefined ? { thinking: claudeThinking } : {}),
+            ...(claudeEffort !== undefined ? { effort: claudeEffort } : {}),
+            ...(claudeFastMode !== undefined ? { fastMode: claudeFastMode } : {}),
+            ...(claudeContextWindow !== null ? { contextWindow: claudeContextWindow } : {}),
+          },
+        }
+      : {}),
+  };
+
+  return Object.keys(normalized).length > 0 ? normalized : null;
+}
+
+function replaceProviderModelOptions(
+  current: ProviderModelOptions | null | undefined,
+  provider: ProviderKind,
+  nextProviderOptions: ProviderModelOptions[ProviderKind] | null | undefined,
+): ProviderModelOptions | null {
+  const otherProviderOptions =
+    provider === "codex"
+      ? current?.claudeAgent
+        ? { claudeAgent: current.claudeAgent }
+        : {}
+      : current?.codex
+        ? { codex: current.codex }
+        : {};
+  const normalizedNextOptions = normalizeProviderModelOptions({
+    [provider]: nextProviderOptions,
+  });
+  return normalizeProviderModelOptions({
+    ...otherProviderOptions,
+    ...normalizedNextOptions,
+  });
 }
 
 function revokeObjectPreviewUrl(previewUrl: string): void {
@@ -558,15 +668,14 @@ function normalizePersistedComposerDraftState(value: unknown): PersistedComposer
       draftCandidate.interactionMode === "plan" || draftCandidate.interactionMode === "default"
         ? draftCandidate.interactionMode
         : null;
-    const effortCandidate =
-      typeof draftCandidate.effort === "string" ? draftCandidate.effort : null;
-    const effort =
-      effortCandidate && REASONING_EFFORT_VALUES.has(effortCandidate as CodexReasoningEffort)
-        ? (effortCandidate as CodexReasoningEffort)
-        : null;
-    const codexFastMode =
-      draftCandidate.codexFastMode === true ||
-      (typeof draftCandidate.serviceTier === "string" && draftCandidate.serviceTier === "fast");
+    const providerModelOptions = normalizeProviderModelOptions(
+      draftCandidate.providerModelOptions,
+      {
+        effort: draftCandidate.effort,
+        codexFastMode: draftCandidate.codexFastMode,
+        serviceTier: draftCandidate.serviceTier,
+      },
+    );
     if (
       prompt.length === 0 &&
       attachments.length === 0 &&
@@ -575,8 +684,7 @@ function normalizePersistedComposerDraftState(value: unknown): PersistedComposer
       !model &&
       !runtimeMode &&
       !interactionMode &&
-      !effort &&
-      !codexFastMode
+      !providerModelOptions
     ) {
       continue;
     }
@@ -588,8 +696,7 @@ function normalizePersistedComposerDraftState(value: unknown): PersistedComposer
       ...(model ? { model } : {}),
       ...(runtimeMode ? { runtimeMode } : {}),
       ...(interactionMode ? { interactionMode } : {}),
-      ...(effort ? { effort } : {}),
-      ...(codexFastMode ? { codexFastMode } : {}),
+      ...(providerModelOptions ? { providerModelOptions } : {}),
     };
   }
   return {
@@ -746,8 +853,7 @@ function toHydratedThreadDraft(
     model: persistedDraft.model ?? null,
     runtimeMode: persistedDraft.runtimeMode ?? null,
     interactionMode: persistedDraft.interactionMode ?? null,
-    effort: persistedDraft.effort ?? null,
-    codexFastMode: persistedDraft.codexFastMode === true,
+    providerModelOptions: persistedDraft.providerModelOptions ?? null,
   };
 }
 
@@ -1145,28 +1251,30 @@ export const useComposerDraftStore = create<ComposerDraftStoreState>()(
           return { draftsByThreadId: nextDraftsByThreadId };
         });
       },
-      setEffort: (threadId, effort) => {
+      setProviderModelOptions: (threadId, provider, providerModelOptions) => {
         if (threadId.length === 0) {
           return;
         }
-        const nextEffort =
-          effort &&
-          REASONING_EFFORT_VALUES.has(effort) &&
-          effort !== DEFAULT_REASONING_EFFORT_BY_PROVIDER.codex
-            ? effort
-            : null;
+        const normalizedProvider = normalizeProviderKind(provider);
+        if (!normalizedProvider) {
+          return;
+        }
+        const nextProviderModelOptions = normalizeProviderModelOptions({
+          [normalizedProvider]: providerModelOptions,
+        })?.[normalizedProvider];
         set((state) => {
           const existing = state.draftsByThreadId[threadId];
-          if (!existing && nextEffort === null) {
+          if (!existing && !nextProviderModelOptions) {
             return state;
           }
           const base = existing ?? createEmptyThreadDraft();
-          if (base.effort === nextEffort) {
-            return state;
-          }
           const nextDraft: ComposerThreadDraftState = {
             ...base,
-            effort: nextEffort,
+            providerModelOptions: replaceProviderModelOptions(
+              base.providerModelOptions,
+              normalizedProvider,
+              nextProviderModelOptions,
+            ),
           };
           const nextDraftsByThreadId = { ...state.draftsByThreadId };
           if (shouldRemoveDraft(nextDraft)) {
@@ -1177,31 +1285,30 @@ export const useComposerDraftStore = create<ComposerDraftStoreState>()(
           return { draftsByThreadId: nextDraftsByThreadId };
         });
       },
+      setEffort: (threadId, effort) => {
+        if (threadId.length === 0) {
+          return;
+        }
+        const defaultEffort = getDefaultReasoningEffort("codex");
+        const normalizedEffort =
+          effort === "low" || effort === "medium" || effort === "high" || effort === "xhigh"
+            ? effort
+            : null;
+        const existingCodexOptions = get().draftsByThreadId[threadId]?.providerModelOptions?.codex;
+        get().setProviderModelOptions(threadId, "codex", {
+          ...existingCodexOptions,
+          reasoningEffort:
+            normalizedEffort && normalizedEffort !== defaultEffort ? normalizedEffort : undefined,
+        });
+      },
       setCodexFastMode: (threadId, enabled) => {
         if (threadId.length === 0) {
           return;
         }
-        const nextCodexFastMode = enabled === true;
-        set((state) => {
-          const existing = state.draftsByThreadId[threadId];
-          if (!existing && nextCodexFastMode === false) {
-            return state;
-          }
-          const base = existing ?? createEmptyThreadDraft();
-          if (base.codexFastMode === nextCodexFastMode) {
-            return state;
-          }
-          const nextDraft: ComposerThreadDraftState = {
-            ...base,
-            codexFastMode: nextCodexFastMode,
-          };
-          const nextDraftsByThreadId = { ...state.draftsByThreadId };
-          if (shouldRemoveDraft(nextDraft)) {
-            delete nextDraftsByThreadId[threadId];
-          } else {
-            nextDraftsByThreadId[threadId] = nextDraft;
-          }
-          return { draftsByThreadId: nextDraftsByThreadId };
+        const existingCodexOptions = get().draftsByThreadId[threadId]?.providerModelOptions?.codex;
+        get().setProviderModelOptions(threadId, "codex", {
+          ...existingCodexOptions,
+          fastMode: enabled === true ? true : undefined,
         });
       },
       addImage: (threadId, image) => {
@@ -1534,8 +1641,7 @@ export const useComposerDraftStore = create<ComposerDraftStoreState>()(
             draft.model === null &&
             draft.runtimeMode === null &&
             draft.interactionMode === null &&
-            draft.effort === null &&
-            draft.codexFastMode === false
+            draft.providerModelOptions === null
           ) {
             continue;
           }
@@ -1566,11 +1672,8 @@ export const useComposerDraftStore = create<ComposerDraftStoreState>()(
           if (draft.interactionMode) {
             persistedDraft.interactionMode = draft.interactionMode;
           }
-          if (draft.effort) {
-            persistedDraft.effort = draft.effort;
-          }
-          if (draft.codexFastMode) {
-            persistedDraft.codexFastMode = true;
+          if (draft.providerModelOptions) {
+            persistedDraft.providerModelOptions = draft.providerModelOptions;
           }
           persistedDraftsByThreadId[threadId as ThreadId] = persistedDraft;
         }
