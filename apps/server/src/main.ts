@@ -24,11 +24,26 @@ import { makeServerProviderLayer, makeServerRuntimeServicesLayer } from "./serve
 import { ProviderHealthLive } from "./provider/Layers/ProviderHealth";
 import { Server } from "./wsServer";
 import { ServerLoggerLive } from "./serverLogger";
+import { readBootstrapEnvelope } from "./bootstrap";
 
 export class StartupError extends Data.TaggedError("StartupError")<{
   readonly message: string;
   readonly cause?: unknown;
 }> {}
+
+const PortSchema = Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 65535 }));
+
+const BootstrapEnvelopeSchema = Schema.Struct({
+  mode: Schema.optional(Schema.String),
+  port: Schema.optional(PortSchema),
+  host: Schema.optional(Schema.String),
+  stateDir: Schema.optional(Schema.String),
+  devUrl: Schema.optional(Schema.URLFromString),
+  noBrowser: Schema.optional(Schema.Boolean),
+  authToken: Schema.optional(Schema.String),
+  autoBootstrapProjectFromCwd: Schema.optional(Schema.Boolean),
+  logWebSocketEvents: Schema.optional(Schema.Boolean),
+});
 
 interface CliInput {
   readonly mode: Option.Option<RuntimeMode>;
@@ -38,6 +53,7 @@ interface CliInput {
   readonly devUrl: Option.Option<URL>;
   readonly noBrowser: Option.Option<boolean>;
   readonly authToken: Option.Option<string>;
+  readonly bootstrapFd: Option.Option<number>;
   readonly autoBootstrapProjectFromCwd: Option.Option<boolean>;
   readonly logWebSocketEvents: Option.Option<boolean>;
 }
@@ -88,12 +104,8 @@ export class CliConfig extends ServiceMap.Service<CliConfig, CliConfigShape>()(
 const CliEnvConfig = Config.all({
   mode: Config.string("OCICODE_MODE").pipe(
     Config.option,
-    Config.map(
-      Option.match<RuntimeMode, string>({
-        onNone: () => "web",
-        onSome: (value) => (value === "desktop" ? "desktop" : "web"),
-      }),
-    ),
+    Config.map(Option.map((value) => (value === "desktop" ? "desktop" : "web"))),
+    Config.map(Option.getOrUndefined),
   ),
   port: Config.port("OCICODE_PORT").pipe(Config.option, Config.map(Option.getOrUndefined)),
   host: Config.string("OCICODE_HOST").pipe(Config.option, Config.map(Option.getOrUndefined)),
@@ -110,6 +122,10 @@ const CliEnvConfig = Config.all({
     Config.option,
     Config.map(Option.getOrUndefined),
   ),
+  bootstrapFd: Config.int("OCICODE_BOOTSTRAP_FD").pipe(
+    Config.option,
+    Config.map(Option.getOrUndefined),
+  ),
   autoBootstrapProjectFromCwd: Config.boolean("OCICODE_AUTO_BOOTSTRAP_PROJECT_FROM_CWD").pipe(
     Config.option,
     Config.map(Option.getOrUndefined),
@@ -122,6 +138,24 @@ const CliEnvConfig = Config.all({
 
 const resolveBooleanFlag = (flag: Option.Option<boolean>, envValue: boolean) =>
   Option.getOrElse(Option.filter(flag, Boolean), () => envValue);
+
+const optionFromUndefined = <Value>(value: Value | undefined): Option.Option<Value> =>
+  value === undefined ? Option.none() : Option.some(value);
+
+const resolveOptionPrecedence = <Value>(
+  ...values: ReadonlyArray<Option.Option<Value>>
+): Option.Option<Value> => {
+  for (const value of values) {
+    if (Option.isSome(value)) {
+      return value;
+    }
+  }
+  return Option.none();
+};
+
+const isValidPort = (value: number): boolean => value >= 1 && value <= 65_535;
+const isRuntimeMode = (value: string): value is RuntimeMode =>
+  value === "web" || value === "desktop";
 
 const ServerConfigLive = (input: CliInput) =>
   Layer.effect(
@@ -136,41 +170,116 @@ const ServerConfigLive = (input: CliInput) =>
         ),
       );
 
-      const mode = Option.getOrElse(input.mode, () => env.mode);
+      const bootstrapFd = Option.getOrUndefined(input.bootstrapFd) ?? env.bootstrapFd;
+      const bootstrapEnvelope =
+        bootstrapFd !== undefined
+          ? yield* readBootstrapEnvelope(BootstrapEnvelopeSchema, bootstrapFd)
+          : Option.none();
 
-      const port = yield* Option.match(input.port, {
-        onSome: (value) => Effect.succeed(value),
-        onNone: () => {
-          if (env.port) {
-            return Effect.succeed(env.port);
-          }
-          if (mode === "desktop") {
-            return Effect.succeed(DEFAULT_PORT);
-          }
-          return findAvailablePort(DEFAULT_PORT);
-        },
-      });
-      const stateDir = yield* resolveStateDir(
-        Option.getOrUndefined(input.stateDir) ?? env.stateDir,
+      const mode: RuntimeMode = Option.getOrElse(
+        resolveOptionPrecedence(
+          input.mode,
+          optionFromUndefined(env.mode),
+          Option.flatMap(bootstrapEnvelope, (bootstrap) =>
+            Option.filter(optionFromUndefined(bootstrap.mode), isRuntimeMode),
+          ),
+        ),
+        () => "web",
       );
-      const devUrl = Option.getOrElse(input.devUrl, () => env.devUrl);
-      const noBrowser = resolveBooleanFlag(input.noBrowser, env.noBrowser ?? mode === "desktop");
-      const authToken = Option.getOrUndefined(input.authToken) ?? env.authToken;
+
+      const port = yield* Option.match(
+        resolveOptionPrecedence(
+          input.port,
+          optionFromUndefined(env.port),
+          Option.flatMap(bootstrapEnvelope, (bootstrap) =>
+            Option.filter(optionFromUndefined(bootstrap.port), isValidPort),
+          ),
+        ),
+        {
+          onSome: (value) => Effect.succeed(value),
+          onNone: () => {
+            if (mode === "desktop") {
+              return Effect.succeed(DEFAULT_PORT);
+            }
+            return findAvailablePort(DEFAULT_PORT);
+          },
+        },
+      );
+      const stateDir = yield* resolveStateDir(
+        Option.getOrUndefined(
+          resolveOptionPrecedence(
+            input.stateDir,
+            optionFromUndefined(env.stateDir),
+            Option.flatMap(bootstrapEnvelope, (bootstrap) =>
+              optionFromUndefined(bootstrap.stateDir),
+            ),
+          ),
+        ),
+      );
+      const devUrl = Option.getOrElse(
+        resolveOptionPrecedence(
+          input.devUrl,
+          optionFromUndefined(env.devUrl),
+          Option.flatMap(bootstrapEnvelope, (bootstrap) => optionFromUndefined(bootstrap.devUrl)),
+        ),
+        () => undefined,
+      );
+      const noBrowser = resolveBooleanFlag(
+        input.noBrowser,
+        Option.getOrElse(
+          resolveOptionPrecedence(
+            optionFromUndefined(env.noBrowser),
+            Option.flatMap(bootstrapEnvelope, (bootstrap) =>
+              optionFromUndefined(bootstrap.noBrowser),
+            ),
+          ),
+          () => mode === "desktop",
+        ),
+      );
+      const authToken = Option.getOrUndefined(
+        resolveOptionPrecedence(
+          input.authToken,
+          optionFromUndefined(env.authToken),
+          Option.flatMap(bootstrapEnvelope, (bootstrap) =>
+            optionFromUndefined(bootstrap.authToken),
+          ),
+        ),
+      );
       const autoBootstrapProjectFromCwd = resolveBooleanFlag(
         input.autoBootstrapProjectFromCwd,
-        env.autoBootstrapProjectFromCwd ?? mode === "web",
+        Option.getOrElse(
+          resolveOptionPrecedence(
+            optionFromUndefined(env.autoBootstrapProjectFromCwd),
+            Option.flatMap(bootstrapEnvelope, (bootstrap) =>
+              optionFromUndefined(bootstrap.autoBootstrapProjectFromCwd),
+            ),
+          ),
+          () => mode === "web",
+        ),
       );
       const logWebSocketEvents = resolveBooleanFlag(
         input.logWebSocketEvents,
-        env.logWebSocketEvents ?? Boolean(devUrl),
+        Option.getOrElse(
+          resolveOptionPrecedence(
+            optionFromUndefined(env.logWebSocketEvents),
+            Option.flatMap(bootstrapEnvelope, (bootstrap) =>
+              optionFromUndefined(bootstrap.logWebSocketEvents),
+            ),
+          ),
+          () => Boolean(devUrl),
+        ),
       );
       const staticDir = devUrl ? undefined : yield* cliConfig.resolveStaticDir;
       const { join } = yield* Path.Path;
       const keybindingsConfigPath = join(stateDir, "keybindings.json");
-      const host =
-        Option.getOrUndefined(input.host) ??
-        env.host ??
-        (mode === "desktop" ? "127.0.0.1" : undefined);
+      const host = Option.getOrElse(
+        resolveOptionPrecedence(
+          input.host,
+          optionFromUndefined(env.host),
+          Option.flatMap(bootstrapEnvelope, (bootstrap) => optionFromUndefined(bootstrap.host)),
+        ),
+        () => (mode === "desktop" ? "127.0.0.1" : undefined),
+      );
 
       const config: ServerConfigShape = {
         mode,
@@ -262,7 +371,7 @@ const modeFlag = Flag.choice("mode", ["web", "desktop"]).pipe(
   Flag.optional,
 );
 const portFlag = Flag.integer("port").pipe(
-  Flag.withSchema(Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 65535 }))),
+  Flag.withSchema(PortSchema),
   Flag.withDescription("Port for the HTTP/WebSocket server."),
   Flag.optional,
 );
@@ -288,6 +397,11 @@ const authTokenFlag = Flag.string("auth-token").pipe(
   Flag.withAlias("token"),
   Flag.optional,
 );
+const bootstrapFdFlag = Flag.integer("bootstrap-fd").pipe(
+  Flag.withSchema(Schema.Int),
+  Flag.withDescription("Read one-time bootstrap secrets from the given file descriptor."),
+  Flag.optional,
+);
 const autoBootstrapProjectFromCwdFlag = Flag.boolean("auto-bootstrap-project-from-cwd").pipe(
   Flag.withDescription(
     "Create a project for the current working directory on startup when missing.",
@@ -310,6 +424,7 @@ export const ocicodeCli = Command.make(CLI_NAME, {
   devUrl: devUrlFlag,
   noBrowser: noBrowserFlag,
   authToken: authTokenFlag,
+  bootstrapFd: bootstrapFdFlag,
   autoBootstrapProjectFromCwd: autoBootstrapProjectFromCwdFlag,
   logWebSocketEvents: logWebSocketEventsFlag,
 }).pipe(

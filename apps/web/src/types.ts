@@ -81,6 +81,8 @@ export interface Project {
   model: string;
   expanded: boolean;
   scripts: ProjectScript[];
+  createdAt?: string | undefined;
+  updatedAt?: string | undefined;
 }
 
 export interface Thread {
@@ -96,6 +98,7 @@ export interface Thread {
   proposedPlans: ProposedPlan[];
   error: string | null;
   createdAt: string;
+  updatedAt?: string | undefined;
   latestTurn: OrchestrationLatestTurn | null;
   lastVisitedAt?: string | undefined;
   branch: string | null;

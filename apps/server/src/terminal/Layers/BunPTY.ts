@@ -86,11 +86,13 @@ class BunPtyProcess implements PtyProcess {
   }
 }
 
-export const BunPtyAdapterLive = Layer.effect(
+export const layer = Layer.effect(
   PtyAdapter,
   Effect.gen(function* () {
     if (process.platform === "win32") {
-      return yield* Effect.die("Bun PTY terminal support is unavailable on Windows.");
+      return yield* Effect.die(
+        "Bun PTY terminal support is unavailable on Windows. Please use Node.js instead.",
+      );
     }
     return {
       spawn: (input) =>
@@ -114,3 +116,5 @@ export const BunPtyAdapterLive = Layer.effect(
     } satisfies PtyAdapterShape;
   }),
 );
+
+export const BunPtyAdapterLive = layer;

@@ -3,10 +3,16 @@ import { Option, Schema } from "effect";
 import { type ProviderKind } from "@ocicode/contracts";
 import { makeStorageKey } from "@ocicode/shared/branding";
 import { getDefaultModel, getModelOptions, normalizeModelSlug } from "@ocicode/shared/model";
+import { TIMESTAMP_FORMAT_VALUES } from "./timestampFormat";
 
 const APP_SETTINGS_STORAGE_KEY = makeStorageKey("app-settings:v1");
 const MAX_CUSTOM_MODEL_COUNT = 32;
 export const MAX_CUSTOM_MODEL_LENGTH = 256;
+export type DefaultThreadEnvMode = "local" | "worktree";
+export const SIDEBAR_PROJECT_SORT_ORDER_VALUES = ["updated_at", "created_at", "manual"] as const;
+export type SidebarProjectSortOrder = (typeof SIDEBAR_PROJECT_SORT_ORDER_VALUES)[number];
+export const SIDEBAR_THREAD_SORT_ORDER_VALUES = ["updated_at", "created_at"] as const;
+export type SidebarThreadSortOrder = (typeof SIDEBAR_THREAD_SORT_ORDER_VALUES)[number];
 const BUILT_IN_MODEL_SLUGS_BY_PROVIDER: Record<ProviderKind, ReadonlySet<string>> = {
   codex: new Set(getModelOptions("codex").map((option) => option.slug)),
 };
@@ -19,8 +25,20 @@ const AppSettingsSchema = Schema.Struct({
     Schema.withConstructorDefault(() => Option.some("")),
   ),
   confirmThreadDelete: Schema.Boolean.pipe(Schema.withConstructorDefault(() => Option.some(true))),
+  defaultThreadEnvMode: Schema.Literals(["local", "worktree"]).pipe(
+    Schema.withConstructorDefault(() => Option.some("local")),
+  ),
   enableAssistantStreaming: Schema.Boolean.pipe(
     Schema.withConstructorDefault(() => Option.some(false)),
+  ),
+  sidebarProjectSortOrder: Schema.Literals(SIDEBAR_PROJECT_SORT_ORDER_VALUES).pipe(
+    Schema.withConstructorDefault(() => Option.some("updated_at")),
+  ),
+  sidebarThreadSortOrder: Schema.Literals(SIDEBAR_THREAD_SORT_ORDER_VALUES).pipe(
+    Schema.withConstructorDefault(() => Option.some("updated_at")),
+  ),
+  timestampFormat: Schema.Literals(TIMESTAMP_FORMAT_VALUES).pipe(
+    Schema.withConstructorDefault(() => Option.some("locale")),
   ),
   customCodexModels: Schema.Array(Schema.String).pipe(
     Schema.withConstructorDefault(() => Option.some([])),

@@ -4,17 +4,24 @@ import { useCallback, useState } from "react";
 import { type ProviderKind } from "@ocicode/contracts";
 import { getModelOptions, normalizeModelSlug } from "@ocicode/shared/model";
 
-import { MAX_CUSTOM_MODEL_LENGTH, useAppSettings } from "../appSettings";
+import {
+  MAX_CUSTOM_MODEL_LENGTH,
+  type SidebarProjectSortOrder,
+  type SidebarThreadSortOrder,
+  useAppSettings,
+} from "../appSettings";
+import { openInPreferredEditor } from "../editorPreferences";
 import { isElectron } from "../env";
 import { useColorTint, type ColorTint } from "../hooks/useColorTint";
 import { useTheme } from "../hooks/useTheme";
 import { serverConfigQueryOptions } from "../lib/serverReactQuery";
 import { ensureNativeApi } from "../nativeApi";
-import { preferredTerminalEditor } from "../terminal-links";
+import { type TimestampFormat } from "../timestampFormat";
 import { Button } from "../components/ui/button";
 import { Input } from "../components/ui/input";
 import { Switch } from "../components/ui/switch";
 import { SidebarInset } from "~/components/ui/sidebar";
+import { cn } from "~/lib/utils";
 
 const THEME_OPTIONS = [
   {
@@ -66,6 +73,80 @@ const MODEL_PROVIDER_SETTINGS: Array<{
     example: "gpt-6.7-codex-ultra-preview",
   },
 ] as const;
+
+const TIMESTAMP_FORMAT_OPTIONS: ReadonlyArray<{
+  value: TimestampFormat;
+  label: string;
+  description: string;
+}> = [
+  {
+    value: "locale",
+    label: "System locale",
+    description: "Use your operating system's preferred time format.",
+  },
+  {
+    value: "12-hour",
+    label: "12-hour",
+    description: "Show times like 3:42 PM.",
+  },
+  {
+    value: "24-hour",
+    label: "24-hour",
+    description: "Show times like 15:42.",
+  },
+];
+
+const DEFAULT_THREAD_ENV_MODE_OPTIONS = [
+  {
+    value: "local",
+    label: "Local",
+    description: "New draft threads start in the current workspace.",
+  },
+  {
+    value: "worktree",
+    label: "New worktree",
+    description: "New draft threads default to creating a dedicated worktree.",
+  },
+] as const;
+
+const SIDEBAR_PROJECT_SORT_OPTIONS: ReadonlyArray<{
+  value: SidebarProjectSortOrder;
+  label: string;
+  description: string;
+}> = [
+  {
+    value: "updated_at",
+    label: "Recent activity",
+    description: "Sort projects by the latest user message in each project.",
+  },
+  {
+    value: "created_at",
+    label: "Created at",
+    description: "Keep newer projects near the top.",
+  },
+  {
+    value: "manual",
+    label: "Manual order",
+    description: "Drag projects in the sidebar to reorder them.",
+  },
+];
+
+const SIDEBAR_THREAD_SORT_OPTIONS: ReadonlyArray<{
+  value: SidebarThreadSortOrder;
+  label: string;
+  description: string;
+}> = [
+  {
+    value: "updated_at",
+    label: "Recent activity",
+    description: "Sort threads by the latest user message.",
+  },
+  {
+    value: "created_at",
+    label: "Created at",
+    description: "Keep newer threads near the top.",
+  },
+];
 
 function getCustomModelsForProvider(
   settings: ReturnType<typeof useAppSettings>["settings"],
@@ -122,8 +203,7 @@ function SettingsRouteView() {
     setOpenKeybindingsError(null);
     setIsOpeningKeybindings(true);
     const api = ensureNativeApi();
-    void api.shell
-      .openInEditor(keybindingsConfigPath, preferredTerminalEditor())
+    void openInPreferredEditor(api, keybindingsConfigPath)
       .catch((error) => {
         setOpenKeybindingsError(
           error instanceof Error ? error.message : "Unable to open keybindings file.",
@@ -134,54 +214,62 @@ function SettingsRouteView() {
       });
   }, [keybindingsConfigPath]);
 
-  const addCustomModel = useCallback((provider: ProviderKind) => {
-    const customModelInput = customModelInputByProvider[provider];
-    const customModels = getCustomModelsForProvider(settings, provider);
-    const normalized = normalizeModelSlug(customModelInput, provider);
-    if (!normalized) {
-      setCustomModelErrorByProvider((existing) => ({
-        ...existing,
-        [provider]: "Enter a model slug.",
-      }));
-      return;
-    }
-    if (getModelOptions(provider).some((option) => option.slug === normalized)) {
-      setCustomModelErrorByProvider((existing) => ({
-        ...existing,
-        [provider]: "That model is already built in.",
-      }));
-      return;
-    }
-    if (normalized.length > MAX_CUSTOM_MODEL_LENGTH) {
-      setCustomModelErrorByProvider((existing) => ({
-        ...existing,
-        [provider]: `Model slugs must be ${MAX_CUSTOM_MODEL_LENGTH} characters or less.`,
-      }));
-      return;
-    }
-    if (customModels.includes(normalized)) {
-      setCustomModelErrorByProvider((existing) => ({
-        ...existing,
-        [provider]: "That custom model is already saved.",
-      }));
-      return;
-    }
+  const addCustomModel = useCallback(
+    (provider: ProviderKind) => {
+      const customModelInput = customModelInputByProvider[provider];
+      const customModels = getCustomModelsForProvider(settings, provider);
+      const normalized = normalizeModelSlug(customModelInput, provider);
+      if (!normalized) {
+        setCustomModelErrorByProvider((existing) => ({
+          ...existing,
+          [provider]: "Enter a model slug.",
+        }));
+        return;
+      }
+      if (getModelOptions(provider).some((option) => option.slug === normalized)) {
+        setCustomModelErrorByProvider((existing) => ({
+          ...existing,
+          [provider]: "That model is already built in.",
+        }));
+        return;
+      }
+      if (normalized.length > MAX_CUSTOM_MODEL_LENGTH) {
+        setCustomModelErrorByProvider((existing) => ({
+          ...existing,
+          [provider]: `Model slugs must be ${MAX_CUSTOM_MODEL_LENGTH} characters or less.`,
+        }));
+        return;
+      }
+      if (customModels.includes(normalized)) {
+        setCustomModelErrorByProvider((existing) => ({
+          ...existing,
+          [provider]: "That custom model is already saved.",
+        }));
+        return;
+      }
 
-    updateSettings(patchCustomModels(provider, [...customModels, normalized]));
-    setCustomModelInputByProvider((existing) => ({
-      ...existing,
-      [provider]: "",
-    }));
-    setCustomModelErrorByProvider((existing) => ({
-      ...existing,
-      [provider]: null,
-    }));
-  }, [customModelInputByProvider, settings, updateSettings]);
+      updateSettings(patchCustomModels(provider, [...customModels, normalized]));
+      setCustomModelInputByProvider((existing) => ({
+        ...existing,
+        [provider]: "",
+      }));
+      setCustomModelErrorByProvider((existing) => ({
+        ...existing,
+        [provider]: null,
+      }));
+    },
+    [customModelInputByProvider, settings, updateSettings],
+  );
 
   const removeCustomModel = useCallback(
     (provider: ProviderKind, slug: string) => {
       const customModels = getCustomModelsForProvider(settings, provider);
-      updateSettings(patchCustomModels(provider, customModels.filter((model) => model !== slug)));
+      updateSettings(
+        patchCustomModels(
+          provider,
+          customModels.filter((model) => model !== slug),
+        ),
+      );
       setCustomModelErrorByProvider((existing) => ({
         ...existing,
         [provider]: null,
@@ -439,10 +527,9 @@ function SettingsRouteView() {
                                 variant="outline"
                                 onClick={() =>
                                   updateSettings(
-                                    patchCustomModels(
-                                      provider,
-                                      [...getDefaultCustomModelsForProvider(defaults, provider)],
-                                    ),
+                                    patchCustomModels(provider, [
+                                      ...getDefaultCustomModelsForProvider(defaults, provider),
+                                    ]),
                                   )
                                 }
                               >
@@ -529,6 +616,115 @@ function SettingsRouteView() {
 
             <section className="rounded-2xl border border-border bg-card p-5">
               <div className="mb-4">
+                <h2 className="text-sm font-medium text-foreground">Conversation defaults</h2>
+                <p className="mt-1 text-xs text-muted-foreground">
+                  Set the default environment mode and timestamp format for new threads.
+                </p>
+              </div>
+
+              <div className="space-y-5">
+                <div className="space-y-2">
+                  <div>
+                    <p className="text-sm font-medium text-foreground">Default new thread mode</p>
+                    <p className="text-xs text-muted-foreground">
+                      Controls whether draft threads start locally or in new-worktree mode.
+                    </p>
+                  </div>
+                  <div className="grid gap-2 sm:grid-cols-2">
+                    {DEFAULT_THREAD_ENV_MODE_OPTIONS.map((option) => {
+                      const selected = settings.defaultThreadEnvMode === option.value;
+                      return (
+                        <button
+                          key={option.value}
+                          type="button"
+                          className={cn(
+                            "rounded-lg border px-3 py-2 text-left transition-colors",
+                            selected
+                              ? "border-primary/60 bg-primary/8 text-foreground"
+                              : "border-border bg-background text-muted-foreground hover:bg-accent",
+                          )}
+                          onClick={() => updateSettings({ defaultThreadEnvMode: option.value })}
+                        >
+                          <span className="block text-sm font-medium text-inherit">
+                            {option.label}
+                          </span>
+                          <span className="mt-1 block text-xs opacity-80">
+                            {option.description}
+                          </span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                  {settings.defaultThreadEnvMode !== defaults.defaultThreadEnvMode ? (
+                    <div className="flex justify-end">
+                      <Button
+                        size="xs"
+                        variant="outline"
+                        onClick={() =>
+                          updateSettings({
+                            defaultThreadEnvMode: defaults.defaultThreadEnvMode,
+                          })
+                        }
+                      >
+                        Restore default
+                      </Button>
+                    </div>
+                  ) : null}
+                </div>
+
+                <div className="space-y-2">
+                  <div>
+                    <p className="text-sm font-medium text-foreground">Timestamp format</p>
+                    <p className="text-xs text-muted-foreground">
+                      Applies to message timestamps, plan timestamps, and diff history.
+                    </p>
+                  </div>
+                  <div className="grid gap-2 sm:grid-cols-3">
+                    {TIMESTAMP_FORMAT_OPTIONS.map((option) => {
+                      const selected = settings.timestampFormat === option.value;
+                      return (
+                        <button
+                          key={option.value}
+                          type="button"
+                          className={cn(
+                            "rounded-lg border px-3 py-2 text-left transition-colors",
+                            selected
+                              ? "border-primary/60 bg-primary/8 text-foreground"
+                              : "border-border bg-background text-muted-foreground hover:bg-accent",
+                          )}
+                          onClick={() => updateSettings({ timestampFormat: option.value })}
+                        >
+                          <span className="block text-sm font-medium text-inherit">
+                            {option.label}
+                          </span>
+                          <span className="mt-1 block text-xs opacity-80">
+                            {option.description}
+                          </span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                  {settings.timestampFormat !== defaults.timestampFormat ? (
+                    <div className="flex justify-end">
+                      <Button
+                        size="xs"
+                        variant="outline"
+                        onClick={() =>
+                          updateSettings({
+                            timestampFormat: defaults.timestampFormat,
+                          })
+                        }
+                      >
+                        Restore default
+                      </Button>
+                    </div>
+                  ) : null}
+                </div>
+              </div>
+            </section>
+
+            <section className="rounded-2xl border border-border bg-card p-5">
+              <div className="mb-4">
                 <h2 className="text-sm font-medium text-foreground">Keybindings</h2>
                 <p className="mt-1 text-xs text-muted-foreground">
                   Open the persisted <code>keybindings.json</code> file to edit advanced bindings
@@ -560,6 +756,123 @@ function SettingsRouteView() {
                 {openKeybindingsError ? (
                   <p className="text-xs text-destructive">{openKeybindingsError}</p>
                 ) : null}
+              </div>
+            </section>
+
+            <section className="rounded-2xl border border-border bg-card p-5">
+              <div className="mb-4">
+                <h2 className="text-sm font-medium text-foreground">Sidebar</h2>
+                <p className="mt-1 text-xs text-muted-foreground">
+                  Control how projects and threads are ordered in the left sidebar.
+                </p>
+              </div>
+
+              <div className="space-y-5">
+                <div className="space-y-2">
+                  <div>
+                    <p className="text-sm font-medium text-foreground">Project ordering</p>
+                    <p className="text-xs text-muted-foreground">
+                      Manual order enables drag-and-drop reordering directly in the sidebar.
+                    </p>
+                  </div>
+                  <div className="grid gap-2 sm:grid-cols-3">
+                    {SIDEBAR_PROJECT_SORT_OPTIONS.map((option) => {
+                      const selected = settings.sidebarProjectSortOrder === option.value;
+                      return (
+                        <button
+                          key={option.value}
+                          type="button"
+                          className={cn(
+                            "rounded-lg border px-3 py-2 text-left transition-colors",
+                            selected
+                              ? "border-primary/60 bg-primary/8 text-foreground"
+                              : "border-border bg-background text-muted-foreground hover:bg-accent",
+                          )}
+                          onClick={() =>
+                            updateSettings({
+                              sidebarProjectSortOrder: option.value,
+                            })
+                          }
+                        >
+                          <span className="block text-sm font-medium text-inherit">
+                            {option.label}
+                          </span>
+                          <span className="mt-1 block text-xs opacity-80">
+                            {option.description}
+                          </span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                  {settings.sidebarProjectSortOrder !== defaults.sidebarProjectSortOrder ? (
+                    <div className="flex justify-end">
+                      <Button
+                        size="xs"
+                        variant="outline"
+                        onClick={() =>
+                          updateSettings({
+                            sidebarProjectSortOrder: defaults.sidebarProjectSortOrder,
+                          })
+                        }
+                      >
+                        Restore default
+                      </Button>
+                    </div>
+                  ) : null}
+                </div>
+
+                <div className="space-y-2">
+                  <div>
+                    <p className="text-sm font-medium text-foreground">Thread ordering</p>
+                    <p className="text-xs text-muted-foreground">
+                      Applies inside each project group in the sidebar.
+                    </p>
+                  </div>
+                  <div className="grid gap-2 sm:grid-cols-2">
+                    {SIDEBAR_THREAD_SORT_OPTIONS.map((option) => {
+                      const selected = settings.sidebarThreadSortOrder === option.value;
+                      return (
+                        <button
+                          key={option.value}
+                          type="button"
+                          className={cn(
+                            "rounded-lg border px-3 py-2 text-left transition-colors",
+                            selected
+                              ? "border-primary/60 bg-primary/8 text-foreground"
+                              : "border-border bg-background text-muted-foreground hover:bg-accent",
+                          )}
+                          onClick={() =>
+                            updateSettings({
+                              sidebarThreadSortOrder: option.value,
+                            })
+                          }
+                        >
+                          <span className="block text-sm font-medium text-inherit">
+                            {option.label}
+                          </span>
+                          <span className="mt-1 block text-xs opacity-80">
+                            {option.description}
+                          </span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                  {settings.sidebarThreadSortOrder !== defaults.sidebarThreadSortOrder ? (
+                    <div className="flex justify-end">
+                      <Button
+                        size="xs"
+                        variant="outline"
+                        onClick={() =>
+                          updateSettings({
+                            sidebarThreadSortOrder: defaults.sidebarThreadSortOrder,
+                          })
+                        }
+                      >
+                        Restore default
+                      </Button>
+                    </div>
+                  ) : null}
+                </div>
               </div>
             </section>
 

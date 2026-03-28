@@ -1,36 +1,36 @@
 import { describe, expect, it } from "vitest";
 
 import {
-  MIN_CHAT_COLUMN_WIDTH,
-  MIN_CHAT_COLUMN_WIDTH_WITH_DIFF,
-  minChatColumnWidthForShell,
+  MAIN_SIDEBAR_MIN_WIDTH,
+  MIN_CHAT_SHELL_CONTENT_WIDTH,
   shouldAcceptMainSidebarWidth,
 } from "./chatShellLayout";
 
-describe("minChatColumnWidthForShell", () => {
-  it("uses the wider minimum when inline diff is closed", () => {
-    expect(minChatColumnWidthForShell(false)).toBe(MIN_CHAT_COLUMN_WIDTH);
-  });
-
-  it("uses the narrower minimum when inline diff is open", () => {
-    expect(minChatColumnWidthForShell(true)).toBe(MIN_CHAT_COLUMN_WIDTH_WITH_DIFF);
-  });
-});
-
 describe("shouldAcceptMainSidebarWidth", () => {
-  it("accepts widths that preserve the default chat column minimum", () => {
-    expect(shouldAcceptMainSidebarWidth({ chatColumnWidth: 761, diffOpen: false })).toBe(true);
+  it("accepts widths that preserve the minimum chat shell content width", () => {
+    expect(
+      shouldAcceptMainSidebarWidth({
+        nextSidebarWidth: 320,
+        shellWidth: 320 + MIN_CHAT_SHELL_CONTENT_WIDTH,
+      }),
+    ).toBe(true);
   });
 
-  it("rejects widths that squeeze the default chat column below the minimum", () => {
-    expect(shouldAcceptMainSidebarWidth({ chatColumnWidth: 759, diffOpen: false })).toBe(false);
+  it("rejects widths that squeeze the main content below the minimum", () => {
+    expect(
+      shouldAcceptMainSidebarWidth({
+        nextSidebarWidth: 320,
+        shellWidth: 320 + MIN_CHAT_SHELL_CONTENT_WIDTH - 1,
+      }),
+    ).toBe(false);
   });
 
-  it("accepts widths that preserve the narrower diff-open minimum", () => {
-    expect(shouldAcceptMainSidebarWidth({ chatColumnWidth: 640, diffOpen: true })).toBe(true);
-  });
-
-  it("rejects widths that squeeze the diff-open chat column below the minimum", () => {
-    expect(shouldAcceptMainSidebarWidth({ chatColumnWidth: 639, diffOpen: true })).toBe(false);
+  it("keeps the resize range valid on a 1024px desktop window", () => {
+    expect(
+      shouldAcceptMainSidebarWidth({
+        nextSidebarWidth: MAIN_SIDEBAR_MIN_WIDTH,
+        shellWidth: 1024,
+      }),
+    ).toBe(true);
   });
 });

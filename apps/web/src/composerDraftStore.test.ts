@@ -6,6 +6,11 @@ import {
   createDebouncedStorage,
   useComposerDraftStore,
 } from "./composerDraftStore";
+import {
+  INLINE_TERMINAL_CONTEXT_PLACEHOLDER,
+  insertInlineTerminalContextPlaceholder,
+  type TerminalContextDraft,
+} from "./lib/terminalContext";
 
 function makeImage(input: {
   id: string;
@@ -31,6 +36,26 @@ function makeImage(input: {
     sizeBytes: file.size,
     previewUrl: input.previewUrl,
     file,
+  };
+}
+
+function makeTerminalContext(input: {
+  id: string;
+  text?: string;
+  terminalId?: string;
+  terminalLabel?: string;
+  lineStart?: number;
+  lineEnd?: number;
+}): TerminalContextDraft {
+  return {
+    id: input.id,
+    threadId: ThreadId.makeUnsafe("thread-dedupe"),
+    terminalId: input.terminalId ?? "default",
+    terminalLabel: input.terminalLabel ?? "Terminal 1",
+    lineStart: input.lineStart ?? 4,
+    lineEnd: input.lineEnd ?? 5,
+    text: input.text ?? "git status\nOn branch main",
+    createdAt: "2026-03-13T12:00:00.000Z",
   };
 }
 
@@ -156,6 +181,60 @@ describe("composerDraftStore clearComposerContent", () => {
     expect(draft).toBeUndefined();
     expect(revokeSpy).not.toHaveBeenCalledWith("blob:optimistic");
   });
+
+  it("clears terminal contexts alongside prompt content", () => {
+    const terminalContext = makeTerminalContext({ id: "context-clear" });
+    const placeholderInsertion = insertInlineTerminalContextPlaceholder("Investigate", 0);
+
+    useComposerDraftStore
+      .getState()
+      .insertTerminalContext(threadId, placeholderInsertion.prompt, terminalContext, 0);
+
+    useComposerDraftStore.getState().clearComposerContent(threadId);
+
+    expect(useComposerDraftStore.getState().draftsByThreadId[threadId]).toBeUndefined();
+  });
+});
+
+describe("composerDraftStore terminal contexts", () => {
+  const threadId = ThreadId.makeUnsafe("thread-terminal-contexts");
+
+  beforeEach(() => {
+    useComposerDraftStore.setState({
+      draftsByThreadId: {},
+      draftThreadsByThreadId: {},
+      projectDraftThreadIdByProjectId: {},
+    });
+  });
+
+  it("inserts terminal contexts in placeholder order and deduplicates by id", () => {
+    const first = makeTerminalContext({ id: "context-1" });
+    const second = makeTerminalContext({ id: "context-2", lineStart: 8, lineEnd: 9 });
+    const prompt = `${INLINE_TERMINAL_CONTEXT_PLACEHOLDER} ${INLINE_TERMINAL_CONTEXT_PLACEHOLDER} Investigate`;
+
+    useComposerDraftStore.getState().insertTerminalContext(threadId, prompt, second, 0);
+    useComposerDraftStore.getState().insertTerminalContext(threadId, prompt, first, 0);
+    useComposerDraftStore.getState().insertTerminalContext(threadId, prompt, first, 0);
+
+    const draft = useComposerDraftStore.getState().draftsByThreadId[threadId];
+    expect(draft?.terminalContexts.map((context) => context.id)).toEqual([
+      "context-1",
+      "context-2",
+    ]);
+    expect(draft?.prompt).toBe(prompt);
+  });
+
+  it("removes terminal contexts by id", () => {
+    const context = makeTerminalContext({ id: "context-remove" });
+    const prompt = `${INLINE_TERMINAL_CONTEXT_PLACEHOLDER} Investigate`;
+
+    useComposerDraftStore.getState().insertTerminalContext(threadId, prompt, context, 0);
+    useComposerDraftStore.getState().removeTerminalContext(threadId, context.id);
+
+    const draft = useComposerDraftStore.getState().draftsByThreadId[threadId];
+    expect(draft?.terminalContexts).toEqual([]);
+    expect(draft?.prompt).toBe(prompt);
+  });
 });
 
 describe("composerDraftStore project draft thread mapping", () => {
@@ -252,9 +331,9 @@ describe("composerDraftStore project draft thread mapping", () => {
     store.clearProjectDraftThreadId(projectId);
 
     expect(useComposerDraftStore.getState().getDraftThreadByProjectId(projectId)).toBeNull();
-    expect(useComposerDraftStore.getState().getDraftThreadByProjectId(otherProjectId)?.threadId).toBe(
-      threadId,
-    );
+    expect(
+      useComposerDraftStore.getState().getDraftThreadByProjectId(otherProjectId)?.threadId,
+    ).toBe(threadId);
     expect(useComposerDraftStore.getState().draftsByThreadId[threadId]?.prompt).toBe("keep me");
   });
 
@@ -380,7 +459,9 @@ describe("composerDraftStore setModel", () => {
 
     store.setModel(threadId, "gpt-5.3-codex");
 
-    expect(useComposerDraftStore.getState().draftsByThreadId[threadId]?.model).toBe("gpt-5.3-codex");
+    expect(useComposerDraftStore.getState().draftsByThreadId[threadId]?.model).toBe(
+      "gpt-5.3-codex",
+    );
   });
 });
 

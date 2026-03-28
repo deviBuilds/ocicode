@@ -21,11 +21,8 @@ import type { ContextMenuItem } from "@ocicode/contracts";
 import { NetService } from "@ocicode/shared/Net";
 import { RotatingFileSink } from "@ocicode/shared/logging";
 import { showDesktopConfirmDialog } from "./confirmDialog";
-import { fixPath } from "./fixPath";
-import {
-  getAutoUpdateDisabledReason,
-  shouldBroadcastDownloadProgress,
-} from "./updateState";
+import { syncShellEnvironment } from "./syncShellEnvironment";
+import { getAutoUpdateDisabledReason, shouldBroadcastDownloadProgress } from "./updateState";
 import {
   createInitialDesktopUpdateState,
   reduceDesktopUpdateStateOnCheckFailure,
@@ -40,7 +37,7 @@ import {
 } from "./updateMachine";
 import { isArm64HostRunningIntelBuild, resolveDesktopRuntimeInfo } from "./runtimeArch";
 
-fixPath();
+syncShellEnvironment();
 
 const PICK_FOLDER_CHANNEL = "desktop:pick-folder";
 const CONFIRM_CHANNEL = "desktop:confirm";
@@ -51,6 +48,7 @@ const UPDATE_STATE_CHANNEL = "desktop:update-state";
 const UPDATE_GET_STATE_CHANNEL = "desktop:update-get-state";
 const UPDATE_DOWNLOAD_CHANNEL = "desktop:update-download";
 const UPDATE_INSTALL_CHANNEL = "desktop:update-install";
+const GET_WS_URL_CHANNEL = "desktop:get-ws-url";
 const STATE_DIR =
   process.env.OCICODE_STATE_DIR?.trim() ||
   Path.join(OS.homedir(), STATE_ROOT_DIRNAME, USERDATA_DIRNAME);
@@ -573,7 +571,21 @@ function configureApplicationMenu(): void {
       ],
     },
     { role: "editMenu" },
-    { role: "viewMenu" },
+    {
+      label: "View",
+      submenu: [
+        { role: "reload" },
+        { role: "forceReload" },
+        { role: "toggleDevTools" },
+        { type: "separator" },
+        { role: "resetZoom" },
+        { role: "zoomIn", accelerator: "CmdOrCtrl+=" },
+        { role: "zoomIn", accelerator: "CmdOrCtrl+Plus", visible: false },
+        { role: "zoomOut" },
+        { type: "separator" },
+        { role: "togglefullscreen" },
+      ],
+    },
     { role: "windowMenu" },
     {
       role: "help",
@@ -702,7 +714,9 @@ async function checkForUpdates(reason: string): Promise<void> {
     await autoUpdater.checkForUpdates();
   } catch (error: unknown) {
     const message = error instanceof Error ? error.message : String(error);
-    setUpdateState(reduceDesktopUpdateStateOnCheckFailure(updateState, message, new Date().toISOString()));
+    setUpdateState(
+      reduceDesktopUpdateStateOnCheckFailure(updateState, message, new Date().toISOString()),
+    );
     console.error(`[desktop-updater] Failed to check for updates: ${message}`);
   } finally {
     updateCheckInFlight = false;
@@ -764,9 +778,7 @@ function configureAutoUpdater(): void {
   updaterConfigured = true;
 
   const githubToken =
-    process.env.OCICODE_DESKTOP_UPDATE_GITHUB_TOKEN?.trim() ||
-    process.env.GH_TOKEN?.trim() ||
-    "";
+    process.env.OCICODE_DESKTOP_UPDATE_GITHUB_TOKEN?.trim() || process.env.GH_TOKEN?.trim() || "";
   if (githubToken) {
     // When a token is provided, re-configure the feed with `private: true` so
     // electron-updater uses the GitHub API (api.github.com) instead of the
@@ -801,7 +813,13 @@ function configureAutoUpdater(): void {
     console.info("[desktop-updater] Looking for updates...");
   });
   autoUpdater.on("update-available", (info) => {
-    setUpdateState(reduceDesktopUpdateStateOnUpdateAvailable(updateState, info.version, new Date().toISOString()));
+    setUpdateState(
+      reduceDesktopUpdateStateOnUpdateAvailable(
+        updateState,
+        info.version,
+        new Date().toISOString(),
+      ),
+    );
     lastLoggedDownloadMilestone = -1;
     console.info(`[desktop-updater] Update available: ${info.version}`);
   });
@@ -856,15 +874,15 @@ function configureAutoUpdater(): void {
   }, AUTO_UPDATE_POLL_INTERVAL_MS);
   updatePollTimer.unref();
 }
-function backendEnv(): NodeJS.ProcessEnv {
-  return {
-    ...process.env,
-    OCICODE_MODE: "desktop",
-    OCICODE_NO_BROWSER: "1",
-    OCICODE_PORT: String(backendPort),
-    OCICODE_STATE_DIR: STATE_DIR,
-    OCICODE_AUTH_TOKEN: backendAuthToken,
-  };
+function backendChildEnv(): NodeJS.ProcessEnv {
+  const env = { ...process.env };
+  delete env.OCICODE_PORT;
+  delete env.OCICODE_AUTH_TOKEN;
+  delete env.OCICODE_MODE;
+  delete env.OCICODE_NO_BROWSER;
+  delete env.OCICODE_HOST;
+  delete env.OCICODE_DESKTOP_WS_URL;
+  return env;
 }
 
 function scheduleBackendRestart(reason: string): void {
@@ -890,16 +908,35 @@ function startBackend(): void {
   }
 
   const captureBackendLogs = app.isPackaged && backendLogSink !== null;
-  const child = ChildProcess.spawn(process.execPath, [backendEntry], {
+  const child = ChildProcess.spawn(process.execPath, [backendEntry, "--bootstrap-fd", "3"], {
     cwd: resolveBackendCwd(),
     // In Electron main, process.execPath points to the Electron binary.
     // Run the child in Node mode so this backend process does not become a GUI app instance.
     env: {
-      ...backendEnv(),
+      ...backendChildEnv(),
       ELECTRON_RUN_AS_NODE: "1",
     },
-    stdio: captureBackendLogs ? ["ignore", "pipe", "pipe"] : "inherit",
+    stdio: captureBackendLogs
+      ? ["ignore", "pipe", "pipe", "pipe"]
+      : ["ignore", "inherit", "inherit", "pipe"],
   });
+  const bootstrapStream = child.stdio[3];
+  if (bootstrapStream && "write" in bootstrapStream) {
+    bootstrapStream.write(
+      `${JSON.stringify({
+        mode: "desktop",
+        noBrowser: true,
+        port: backendPort,
+        stateDir: STATE_DIR,
+        authToken: backendAuthToken,
+      })}\n`,
+    );
+    bootstrapStream.end();
+  } else {
+    child.kill("SIGTERM");
+    scheduleBackendRestart("missing desktop bootstrap pipe");
+    return;
+  }
   backendProcess = child;
   let backendSessionClosed = false;
   const closeBackendSession = (details: string) => {
@@ -1010,6 +1047,11 @@ async function stopBackendAndWaitForExit(timeoutMs = 5_000): Promise<void> {
 }
 
 function registerIpcHandlers(): void {
+  ipcMain.removeAllListeners(GET_WS_URL_CHANNEL);
+  ipcMain.on(GET_WS_URL_CHANNEL, (event) => {
+    event.returnValue = backendWsUrl;
+  });
+
   ipcMain.removeHandler(PICK_FOLDER_CHANNEL);
   ipcMain.handle(PICK_FOLDER_CHANNEL, async () => {
     const owner = BrowserWindow.getFocusedWindow() ?? mainWindow;
@@ -1250,9 +1292,9 @@ async function bootstrap(): Promise<void> {
   );
   writeDesktopLogHeader(`reserved backend port via NetService port=${backendPort}`);
   backendAuthToken = Crypto.randomBytes(24).toString("hex");
-  backendWsUrl = `ws://127.0.0.1:${backendPort}/?token=${encodeURIComponent(backendAuthToken)}`;
-  process.env.OCICODE_DESKTOP_WS_URL = backendWsUrl;
-  writeDesktopLogHeader(`bootstrap resolved websocket url=${backendWsUrl}`);
+  const baseUrl = `ws://127.0.0.1:${backendPort}`;
+  backendWsUrl = `${baseUrl}/?token=${encodeURIComponent(backendAuthToken)}`;
+  writeDesktopLogHeader(`bootstrap resolved websocket endpoint baseUrl=${baseUrl}`);
 
   registerIpcHandlers();
   writeDesktopLogHeader("bootstrap ipc handlers registered");

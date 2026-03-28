@@ -14,6 +14,7 @@ import {
   checkpointRefForThreadTurn,
   resolveThreadWorkspaceCwd,
 } from "../../checkpointing/Utils.ts";
+import { clearWorkspaceIndexCache } from "../../workspaceEntries.ts";
 import { CheckpointStore } from "../../checkpointing/Services/CheckpointStore.ts";
 import { ProviderService } from "../../provider/Services/ProviderService.ts";
 import { CheckpointReactor, type CheckpointReactorShape } from "../Services/CheckpointReactor.ts";
@@ -115,9 +116,7 @@ const make = Effect.gen(function* () {
 
   const resolveSessionRuntimeForThread = Effect.fnUntraced(function* (
     threadId: ThreadId,
-  ): Effect.fn.Return<
-    Option.Option<{ readonly threadId: ThreadId; readonly cwd: string }>
-  > {
+  ): Effect.fn.Return<Option.Option<{ readonly threadId: ThreadId; readonly cwd: string }>> {
     const readModel = yield* orchestrationEngine.getReadModel();
     const thread = readModel.threads.find((entry) => entry.id === threadId);
 
@@ -133,9 +132,7 @@ const make = Effect.gen(function* () {
     };
 
     if (thread) {
-      const projectedSession = sessions.find(
-        (session) => session.threadId === thread.id,
-      );
+      const projectedSession = sessions.find((session) => session.threadId === thread.id);
       const fromProjected = findSessionWithCwd(projectedSession);
       if (Option.isSome(fromProjected)) {
         return fromProjected;
@@ -166,7 +163,10 @@ const make = Effect.gen(function* () {
       return;
     }
 
-    if (thread.checkpoints.some((checkpoint) => checkpoint.turnId === turnId)) {
+    const existingCheckpoint = thread.checkpoints.find(
+      (checkpoint) => checkpoint.turnId === turnId,
+    );
+    if (existingCheckpoint && existingCheckpoint.status !== "missing") {
       return;
     }
 
@@ -196,11 +196,16 @@ const make = Effect.gen(function* () {
       return;
     }
 
+    const existingPlaceholder =
+      existingCheckpoint?.status === "missing" ? existingCheckpoint : undefined;
+
     const currentTurnCount = thread.checkpoints.reduce(
       (maxTurnCount, checkpoint) => Math.max(maxTurnCount, checkpoint.checkpointTurnCount),
       0,
     );
-    const nextTurnCount = currentTurnCount + 1;
+    const nextTurnCount = existingPlaceholder
+      ? existingPlaceholder.checkpointTurnCount
+      : currentTurnCount + 1;
     const fromTurnCount = Math.max(0, nextTurnCount - 1);
     const fromCheckpointRef = checkpointRefForThreadTurn(thread.id, fromTurnCount);
     const targetCheckpointRef = checkpointRefForThreadTurn(thread.id, nextTurnCount);
@@ -221,6 +226,8 @@ const make = Effect.gen(function* () {
       cwd: checkpointCwd,
       checkpointRef: targetCheckpointRef,
     });
+
+    clearWorkspaceIndexCache(checkpointCwd);
 
     const files = yield* checkpointStore
       .diffCheckpoints({
@@ -306,9 +313,7 @@ const make = Effect.gen(function* () {
     }
 
     const readModel = yield* orchestrationEngine.getReadModel();
-    const thread = readModel.threads.find(
-      (entry) => entry.id === event.threadId,
-    );
+    const thread = readModel.threads.find((entry) => entry.id === event.threadId);
     if (!thread) {
       return;
     }
@@ -498,6 +503,8 @@ const make = Effect.gen(function* () {
       }).pipe(Effect.catch(() => Effect.void));
       return;
     }
+
+    clearWorkspaceIndexCache(sessionRuntime.value.cwd);
 
     const rolledBackTurns = Math.max(0, currentTurnCount - event.payload.turnCount);
     if (rolledBackTurns > 0) {

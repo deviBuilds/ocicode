@@ -255,7 +255,8 @@ export default function GitActionsControl({ gitCwd, activeThreadId }: GitActions
     }) => {
       const actionStatus = statusOverride ?? gitStatusForActions;
       const actionBranch = actionStatus?.branch ?? null;
-      const actionIsDefaultBranch = isDefaultBranchOverride ?? (featureBranch ? false : isDefaultBranch);
+      const actionIsDefaultBranch =
+        isDefaultBranchOverride ?? (featureBranch ? false : isDefaultBranch);
       const includesCommit =
         !forcePushOnlyProgress && (action === "commit" || !!actionStatus?.hasWorkingTreeChanges);
       if (
@@ -278,14 +279,12 @@ export default function GitActionsControl({ gitCwd, activeThreadId }: GitActions
       }
       onConfirmed?.();
 
-      const pushTarget = !featureBranch && actionBranch ? `origin/${actionBranch}` : undefined;
       const progressStages = buildGitActionProgressStages({
         action,
         hasCustomCommitMessage: !!commitMessage?.trim(),
         hasWorkingTreeChanges: !!actionStatus?.hasWorkingTreeChanges,
         forcePushOnly: forcePushOnlyProgress,
         featureBranch,
-        ...(pushTarget ? { pushTarget } : {}),
       });
       const resolvedProgressToastId =
         progressToastId ??
@@ -331,7 +330,8 @@ export default function GitActionsControl({ gitCwd, activeThreadId }: GitActions
         stopProgressUpdates();
         const resultToast = summarizeGitResult(result);
 
-        const existingOpenPrUrl = actionStatus?.pr?.state === "open" ? actionStatus.pr.url : undefined;
+        const existingOpenPrUrl =
+          actionStatus?.pr?.state === "open" ? actionStatus.pr.url : undefined;
         const prUrl = result.pr.url ?? existingOpenPrUrl;
         const shouldOfferPushCta = action === "commit" && result.commit.status === "created";
         const shouldOfferOpenPrCta =
@@ -374,12 +374,12 @@ export default function GitActionsControl({ gitCwd, activeThreadId }: GitActions
                 },
               }
             : shouldOfferOpenPrCta
-                ? {
-                    actionProps: {
-                      children: "View PR",
-                      onClick: () => {
-                        const api = readNativeApi();
-                        if (!api) return;
+              ? {
+                  actionProps: {
+                    children: "View PR",
+                    onClick: () => {
+                      const api = readNativeApi();
+                      if (!api) return;
                       closeResultToast();
                       void api.shell.openExternal(prUrl);
                     },
@@ -424,7 +424,8 @@ export default function GitActionsControl({ gitCwd, activeThreadId }: GitActions
 
   const continuePendingDefaultBranchAction = useCallback(() => {
     if (!pendingDefaultBranchAction) return;
-    const { action, commitMessage, forcePushOnlyProgress, onConfirmed } = pendingDefaultBranchAction;
+    const { action, commitMessage, forcePushOnlyProgress, onConfirmed } =
+      pendingDefaultBranchAction;
     setPendingDefaultBranchAction(null);
     void runGitActionWithToast({
       action,
@@ -453,7 +454,8 @@ export default function GitActionsControl({ gitCwd, activeThreadId }: GitActions
 
   const checkoutFeatureBranchAndContinuePendingAction = useCallback(() => {
     if (!pendingDefaultBranchAction) return;
-    const { action, commitMessage, forcePushOnlyProgress, onConfirmed } = pendingDefaultBranchAction;
+    const { action, commitMessage, forcePushOnlyProgress, onConfirmed } =
+      pendingDefaultBranchAction;
     setPendingDefaultBranchAction(null);
     checkoutNewBranchAndRunAction({
       action,
@@ -591,7 +593,7 @@ export default function GitActionsControl({ gitCwd, activeThreadId }: GitActions
           {initMutation.isPending ? "Initializing..." : "Initialize Git"}
         </Button>
       ) : (
-        <Group aria-label="Git actions">
+        <Group aria-label="Git actions" className="shrink-0">
           {quickActionDisabledReason ? (
             <Popover>
               <PopoverTrigger
@@ -606,7 +608,7 @@ export default function GitActionsControl({ gitCwd, activeThreadId }: GitActions
                 }
               >
                 <GitQuickActionIcon quickAction={quickAction} />
-                <span className="sr-only @sm/header-actions:not-sr-only @sm/header-actions:ml-0.5">
+                <span className="sr-only @3xl/header-actions:not-sr-only @3xl/header-actions:ml-0.5">
                   {quickAction.label}
                 </span>
               </PopoverTrigger>
@@ -622,12 +624,12 @@ export default function GitActionsControl({ gitCwd, activeThreadId }: GitActions
               onClick={runQuickAction}
             >
               <GitQuickActionIcon quickAction={quickAction} />
-              <span className="sr-only @sm/header-actions:not-sr-only @sm/header-actions:ml-0.5">
+              <span className="sr-only @3xl/header-actions:not-sr-only @3xl/header-actions:ml-0.5">
                 {quickAction.label}
               </span>
             </Button>
           )}
-          <GroupSeparator className="hidden @sm/header-actions:block" />
+          <GroupSeparator className="hidden @3xl/header-actions:block" />
           <Menu
             onOpenChange={(open) => {
               if (open) void invalidateGitQueries(queryClient);
@@ -725,7 +727,9 @@ export default function GitActionsControl({ gitCwd, activeThreadId }: GitActions
               <div className="grid grid-cols-[auto_1fr] items-center gap-x-2 gap-y-1">
                 <span className="text-muted-foreground">Branch</span>
                 <span className="flex items-center justify-between gap-2">
-                  <span className="font-medium">{gitStatusForActions?.branch ?? "(detached HEAD)"}</span>
+                  <span className="font-medium">
+                    {gitStatusForActions?.branch ?? "(detached HEAD)"}
+                  </span>
                   {isDefaultBranch && (
                     <span className="text-right text-warning text-xs">Warning: default branch</span>
                   )}

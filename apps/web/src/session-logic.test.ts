@@ -134,6 +134,36 @@ describe("derivePendingApprovals", () => {
 
     expect(derivePendingApprovals(activities)).toEqual([]);
   });
+
+  it("clears stale pending approvals when the backend marks them stale after restart", () => {
+    const activities: OrchestrationThreadActivity[] = [
+      makeActivity({
+        id: "approval-open-stale-restart",
+        createdAt: "2026-02-23T00:00:01.000Z",
+        kind: "approval.requested",
+        summary: "Command approval requested",
+        tone: "approval",
+        payload: {
+          requestId: "req-stale-restart-1",
+          requestKind: "command",
+        },
+      }),
+      makeActivity({
+        id: "approval-failed-stale-restart",
+        createdAt: "2026-02-23T00:00:02.000Z",
+        kind: "provider.approval.respond.failed",
+        summary: "Provider approval response failed",
+        tone: "error",
+        payload: {
+          requestId: "req-stale-restart-1",
+          detail:
+            "Stale pending approval request: req-stale-restart-1. Provider callback state does not survive app restarts or recovered sessions. Restart the turn to continue.",
+        },
+      }),
+    ];
+
+    expect(derivePendingApprovals(activities)).toEqual([]);
+  });
 });
 
 describe("derivePendingUserInputs", () => {
@@ -479,6 +509,113 @@ describe("deriveWorkLogEntries", () => {
       "apps/web/src/session-logic.ts",
     ]);
   });
+
+  it("extracts compact tool metadata and strips trailing exit codes", () => {
+    const [entry] = deriveWorkLogEntries(
+      [
+        makeActivity({
+          id: "command-metadata",
+          kind: "tool.completed",
+          summary: "Ran command",
+          payload: {
+            title: "Ran command",
+            itemType: "command_execution",
+            requestKind: "command",
+            detail: "bun run lint\n<exited with exit code 0>",
+            data: {
+              item: {
+                command: ["bun", "run", "lint"],
+              },
+            },
+          },
+        }),
+      ],
+      undefined,
+    );
+
+    expect(entry).toMatchObject({
+      toolTitle: "Ran command",
+      itemType: "command_execution",
+      requestKind: "command",
+      command: "bun run lint",
+      detail: "bun run lint",
+    });
+  });
+
+  it("collapses repeated tool lifecycle rows with the same compact key", () => {
+    const entries = deriveWorkLogEntries(
+      [
+        makeActivity({
+          id: "tool-updated",
+          createdAt: "2026-02-23T00:00:01.000Z",
+          kind: "tool.updated",
+          summary: "Ran command complete",
+          payload: {
+            title: "Ran command",
+            itemType: "command_execution",
+            detail: "bun run lint",
+          },
+        }),
+        makeActivity({
+          id: "tool-completed",
+          createdAt: "2026-02-23T00:00:02.000Z",
+          kind: "tool.completed",
+          summary: "Ran command",
+          payload: {
+            title: "Ran command",
+            itemType: "command_execution",
+            detail: "bun run lint",
+            data: {
+              item: {
+                command: ["bun", "run", "lint"],
+              },
+            },
+          },
+        }),
+      ],
+      undefined,
+    );
+
+    expect(entries).toHaveLength(1);
+    expect(entries[0]).toMatchObject({
+      id: "tool-completed",
+      toolTitle: "Ran command",
+      command: "bun run lint",
+    });
+  });
+
+  it("orders equal-timestamp lifecycle entries from updated to completed", () => {
+    const entries = deriveWorkLogEntries(
+      [
+        makeActivity({
+          id: "completed-same-time",
+          createdAt: "2026-02-23T00:00:01.000Z",
+          kind: "tool.completed",
+          summary: "Ran command",
+          payload: {
+            title: "Ran command",
+            itemType: "command_execution",
+            detail: "bun run lint",
+          },
+        }),
+        makeActivity({
+          id: "updated-same-time",
+          createdAt: "2026-02-23T00:00:01.000Z",
+          kind: "tool.updated",
+          summary: "Ran command",
+          payload: {
+            title: "Ran command",
+            itemType: "command_execution",
+            detail: "bun run lint",
+          },
+        }),
+      ],
+      undefined,
+    );
+
+    expect(entries).toHaveLength(1);
+    expect(entries[0]?.id).toBe("completed-same-time");
+  });
 });
 
 describe("deriveTimelineEntries", () => {
@@ -640,16 +777,7 @@ describe("deriveActiveWorkStartedAt", () => {
 });
 
 describe("PROVIDER_OPTIONS", () => {
-  it("keeps Claude Code as the only unavailable placeholder in the stack base", () => {
-    const claude = PROVIDER_OPTIONS.find((option) => option.value === "claudeCode");
-    expect(PROVIDER_OPTIONS).toEqual([
-      { value: "codex", label: "Codex", available: true },
-      { value: "claudeCode", label: "Claude Code", available: false },
-    ]);
-    expect(claude).toEqual({
-      value: "claudeCode",
-      label: "Claude Code",
-      available: false,
-    });
+  it("keeps the provider picker Codex-only", () => {
+    expect(PROVIDER_OPTIONS).toEqual([{ value: "codex", label: "Codex", available: true }]);
   });
 });

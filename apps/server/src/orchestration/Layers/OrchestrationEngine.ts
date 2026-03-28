@@ -229,14 +229,13 @@ const makeOrchestrationEngine = Effect.gen(function* () {
       return yield* Deferred.await(result);
     });
 
-  const streamDomainEvents: OrchestrationEngineShape["streamDomainEvents"] =
-    Stream.fromPubSub(eventPubSub);
-
   return {
     getReadModel,
     readEvents,
     dispatch,
-    streamDomainEvents,
+    get streamDomainEvents(): OrchestrationEngineShape["streamDomainEvents"] {
+      return Stream.fromPubSub(eventPubSub);
+    },
   } satisfies OrchestrationEngineShape;
 });
 

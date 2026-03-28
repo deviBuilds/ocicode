@@ -4,10 +4,7 @@ import { describe, expect, it } from "vitest";
 
 const repoRoot = path.resolve(import.meta.dirname, "..");
 
-const ALLOWED_PATHS = new Set([
-  "bun.lock",
-  "scripts/no-telemetry.test.ts",
-]);
+const ALLOWED_PATHS = new Set(["bun.lock", "scripts/no-telemetry.test.ts"]);
 
 const FORBIDDEN_SOURCE_PATTERNS = [
   "AnalyticsService",

@@ -2,12 +2,12 @@
 
 ## Task Completion Requirements
 
-- Both `bun lint` and `bun typecheck` must pass before considering tasks completed.
+- All of `bun fmt`, `bun lint`, and `bun typecheck` must pass before considering tasks completed.
 - NEVER run `bun test`. Always use `bun run test` (runs Vitest).
 
 ## Project Snapshot
 
-OCI Code is a minimal web GUI for using code agents like Codex and Claude Code (coming soon).
+OCI Code is a minimal web GUI for using code agents like Codex.
 
 This repository is a VERY EARLY WIP. Proposing sweeping changes that improve long-term maintainability is encouraged.
 

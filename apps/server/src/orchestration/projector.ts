@@ -304,12 +304,7 @@ export function projectEvent(
       );
 
     case "thread.runtime-mode-set":
-      return decodeForEvent(
-        ThreadRuntimeModeSetPayload,
-        event.payload,
-        event.type,
-        "payload",
-      ).pipe(
+      return decodeForEvent(ThreadRuntimeModeSetPayload, event.payload, event.type, "payload").pipe(
         Effect.map((payload) => ({
           ...nextBase,
           threads: updateThread(nextBase.threads, payload.threadId, {
@@ -504,6 +499,11 @@ export function projectEvent(
           event.type,
           "checkpoint",
         );
+
+        const existing = thread.checkpoints.find((entry) => entry.turnId === checkpoint.turnId);
+        if (existing && existing.status !== "missing" && checkpoint.status === "missing") {
+          return nextBase;
+        }
 
         const checkpoints = [
           ...thread.checkpoints.filter((entry) => entry.turnId !== checkpoint.turnId),

@@ -32,7 +32,9 @@ export type TypeId = "~local/sqlite-node/SqliteClient";
 /**
  * SqliteClient - Effect service tag for the sqlite SQL client.
  */
-export const SqliteClient = ServiceMap.Service<Client.SqlClient>("ocicode/persistence/NodeSqliteClient");
+export const SqliteClient = ServiceMap.Service<Client.SqlClient>(
+  "ocicode/persistence/NodeSqliteClient",
+);
 
 export interface SqliteClientConfig {
   readonly filename: string;
@@ -50,11 +52,27 @@ export interface SqliteMemoryClientConfig extends Omit<
   "filename" | "readonly"
 > {}
 
+const checkNodeSqliteCompat = () => {
+  const parts = process.versions.node.split(".").map(Number);
+  const major = parts[0] ?? 0;
+  const minor = parts[1] ?? 0;
+  const supported = (major === 22 && minor >= 16) || (major === 23 && minor >= 11) || major >= 24;
+
+  if (!supported) {
+    return Effect.die(
+      `Node.js ${process.versions.node} is missing required node:sqlite APIs (StatementSync.columns). Upgrade to Node.js >=22.16, >=23.11, or >=24.`,
+    );
+  }
+  return Effect.void;
+};
+
 const makeWithDatabase = (
   options: SqliteClientConfig,
   openDatabase: () => DatabaseSync,
 ): Effect.Effect<Client.SqlClient, never, Scope.Scope | Reactivity.Reactivity> =>
   Effect.gen(function* () {
+    yield* checkNodeSqliteCompat();
+
     const compiler = Statement.makeCompilerSqlite(options.transformQueryNames);
     const transformRows = options.transformResultNames
       ? Statement.defaultTransforms(options.transformResultNames).array

@@ -11,4 +11,4 @@ Methods mirror the `NativeApi` interface defined in `@ocicode/contracts`:
 - `providers.respondToRequest`, `providers.stopSession`
 - `shell.openInEditor`, `server.getConfig`
 
-Codex is the only implemented provider. `claudeCode` is reserved in contracts/UI.
+Codex is the only implemented provider.

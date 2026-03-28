@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   getAppModelOptions,
+  getAppSettingsSnapshot,
   getSlashModelOptions,
   normalizeCustomModelSlugs,
   resolveAppModelSelection,
@@ -61,24 +62,23 @@ describe("resolveAppModelSelection", () => {
 
 describe("getSlashModelOptions", () => {
   it("includes saved custom model slugs for /model command suggestions", () => {
-    const options = getSlashModelOptions(
-      "codex",
-      ["custom/internal-model"],
-      "",
-      "gpt-5.3-codex",
-    );
+    const options = getSlashModelOptions("codex", ["custom/internal-model"], "", "gpt-5.3-codex");
 
     expect(options.some((option) => option.slug === "custom/internal-model")).toBe(true);
   });
 
   it("filters slash-model suggestions across built-in and custom model names", () => {
-    const options = getSlashModelOptions(
-      "codex",
-      ["openai/gpt-oss-120b"],
-      "oss",
-      "gpt-5.3-codex",
-    );
+    const options = getSlashModelOptions("codex", ["openai/gpt-oss-120b"], "oss", "gpt-5.3-codex");
 
     expect(options.map((option) => option.slug)).toEqual(["openai/gpt-oss-120b"]);
+  });
+});
+
+describe("getAppSettingsSnapshot", () => {
+  it("defaults new threads to local env mode and locale timestamps", () => {
+    const settings = getAppSettingsSnapshot();
+
+    expect(settings.defaultThreadEnvMode).toBe("local");
+    expect(settings.timestampFormat).toBe("locale");
   });
 });

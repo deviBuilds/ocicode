@@ -1,6 +1,14 @@
+import { ProjectId, ThreadId } from "@ocicode/contracts";
 import { describe, expect, it } from "vitest";
 
-import { hasUnseenCompletion, resolveThreadStatusPill } from "./Sidebar.logic";
+import {
+  getFallbackThreadIdAfterDelete,
+  hasUnseenCompletion,
+  resolveThreadRowClassName,
+  resolveThreadStatusPill,
+  sortProjectsForSidebar,
+  sortThreadsForSidebar,
+} from "./Sidebar.logic";
 
 function makeLatestTurn(overrides?: {
   completedAt?: string | null;
@@ -120,5 +128,113 @@ describe("resolveThreadStatusPill", () => {
         hasPendingUserInput: false,
       }),
     ).toMatchObject({ label: "Completed", pulse: false });
+  });
+});
+
+describe("resolveThreadRowClassName", () => {
+  it("uses the flatter upstream hover treatment for inactive rows", () => {
+    const className = resolveThreadRowClassName({ isActive: false, isSelected: false });
+
+    expect(className).toContain("hover:bg-accent");
+    expect(className).not.toContain("rounded-xl");
+    expect(className).not.toContain("border ");
+  });
+
+  it("keeps selected rows on the primary surface", () => {
+    expect(resolveThreadRowClassName({ isActive: false, isSelected: true })).toContain(
+      "bg-primary/15",
+    );
+    expect(resolveThreadRowClassName({ isActive: true, isSelected: true })).toContain(
+      "bg-primary/22",
+    );
+  });
+});
+
+describe("sidebar sorting", () => {
+  it("sorts threads by latest user activity by default", () => {
+    const threads = [
+      {
+        id: ThreadId.makeUnsafe("thread-a"),
+        projectId: ProjectId.makeUnsafe("project-1"),
+        createdAt: "2026-03-09T10:00:00.000Z",
+        updatedAt: "2026-03-09T10:00:00.000Z",
+        messages: [
+          {
+            id: "message-a" as never,
+            role: "user" as const,
+            text: "first",
+            createdAt: "2026-03-09T10:00:00.000Z",
+            streaming: false,
+          },
+        ],
+      },
+      {
+        id: ThreadId.makeUnsafe("thread-b"),
+        projectId: ProjectId.makeUnsafe("project-1"),
+        createdAt: "2026-03-09T11:00:00.000Z",
+        updatedAt: "2026-03-09T11:00:00.000Z",
+        messages: [
+          {
+            id: "message-b" as never,
+            role: "user" as const,
+            text: "second",
+            createdAt: "2026-03-09T11:00:00.000Z",
+            streaming: false,
+          },
+        ],
+      },
+    ];
+
+    expect(sortThreadsForSidebar(threads, "updated_at").map((thread) => thread.id)).toEqual([
+      "thread-b",
+      "thread-a",
+    ]);
+  });
+
+  it("preserves manual project order", () => {
+    const projects = [
+      {
+        id: ProjectId.makeUnsafe("project-a"),
+        name: "Project A",
+        createdAt: "2026-03-09T10:00:00.000Z",
+      },
+      {
+        id: ProjectId.makeUnsafe("project-b"),
+        name: "Project B",
+        createdAt: "2026-03-09T11:00:00.000Z",
+      },
+    ];
+
+    expect(sortProjectsForSidebar(projects, [], "manual").map((project) => project.id)).toEqual([
+      "project-a",
+      "project-b",
+    ]);
+  });
+
+  it("uses the selected sort order when resolving the next thread after delete", () => {
+    const threads = [
+      {
+        id: ThreadId.makeUnsafe("thread-a"),
+        projectId: ProjectId.makeUnsafe("project-1"),
+        createdAt: "2026-03-09T10:00:00.000Z",
+        updatedAt: "2026-03-09T12:00:00.000Z",
+        messages: [],
+      },
+      {
+        id: ThreadId.makeUnsafe("thread-b"),
+        projectId: ProjectId.makeUnsafe("project-1"),
+        createdAt: "2026-03-09T11:00:00.000Z",
+        updatedAt: "2026-03-09T11:00:00.000Z",
+        messages: [],
+      },
+    ];
+
+    expect(
+      getFallbackThreadIdAfterDelete({
+        threads,
+        deletedThreadId: ThreadId.makeUnsafe("thread-a"),
+        sortOrder: "created_at",
+      }),
+    ).toBe(ThreadId.makeUnsafe("thread-b"));
   });
 });

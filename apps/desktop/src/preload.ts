@@ -10,10 +10,13 @@ const UPDATE_STATE_CHANNEL = "desktop:update-state";
 const UPDATE_GET_STATE_CHANNEL = "desktop:update-get-state";
 const UPDATE_DOWNLOAD_CHANNEL = "desktop:update-download";
 const UPDATE_INSTALL_CHANNEL = "desktop:update-install";
-const wsUrl = process.env.OCICODE_DESKTOP_WS_URL ?? null;
+const GET_WS_URL_CHANNEL = "desktop:get-ws-url";
 
 contextBridge.exposeInMainWorld("desktopBridge", {
-  getWsUrl: () => wsUrl,
+  getWsUrl: () => {
+    const result = ipcRenderer.sendSync(GET_WS_URL_CHANNEL);
+    return typeof result === "string" ? result : null;
+  },
   pickFolder: () => ipcRenderer.invoke(PICK_FOLDER_CHANNEL),
   confirm: (message) => ipcRenderer.invoke(CONFIRM_CHANNEL, message),
   showContextMenu: (items, position) => ipcRenderer.invoke(CONTEXT_MENU_CHANNEL, items, position),

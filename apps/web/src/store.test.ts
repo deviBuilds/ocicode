@@ -7,7 +7,7 @@ import {
 } from "@ocicode/contracts";
 import { describe, expect, it } from "vitest";
 
-import { markThreadUnread, syncServerReadModel, type AppState } from "./store";
+import { markThreadUnread, reorderProjects, syncServerReadModel, type AppState } from "./store";
 import { DEFAULT_INTERACTION_MODE, DEFAULT_RUNTIME_MODE, type Thread } from "./types";
 
 function makeThread(overrides: Partial<Thread> = {}): Thread {
@@ -132,6 +132,42 @@ describe("store pure functions", () => {
 
     expect(next).toEqual(initialState);
   });
+
+  it("reorderProjects moves a project before the drop target", () => {
+    const state: AppState = {
+      projects: [
+        {
+          id: ProjectId.makeUnsafe("project-1"),
+          name: "Project 1",
+          cwd: "/tmp/project-1",
+          model: "gpt-5-codex",
+          expanded: true,
+          scripts: [],
+        },
+        {
+          id: ProjectId.makeUnsafe("project-2"),
+          name: "Project 2",
+          cwd: "/tmp/project-2",
+          model: "gpt-5-codex",
+          expanded: true,
+          scripts: [],
+        },
+      ],
+      threads: [],
+      threadsHydrated: true,
+    };
+
+    const next = reorderProjects(
+      state,
+      ProjectId.makeUnsafe("project-2"),
+      ProjectId.makeUnsafe("project-1"),
+    );
+
+    expect(next.projects.map((project) => project.id)).toEqual([
+      ProjectId.makeUnsafe("project-2"),
+      ProjectId.makeUnsafe("project-1"),
+    ]);
+  });
 });
 
 describe("store read model sync", () => {
@@ -139,7 +175,7 @@ describe("store read model sync", () => {
     const initialState = makeState(makeThread());
     const readModel = makeReadModel(
       makeReadModelThread({
-        model: "claude-opus-4-6",
+        model: "unsupported-model",
       }),
     );
 

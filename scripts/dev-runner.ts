@@ -149,30 +149,41 @@ export function createDevRunnerEnv({
     const serverPort = port ?? BASE_SERVER_PORT + serverOffset;
     const webPort = BASE_WEB_PORT + webOffset;
     const resolvedStateDir = yield* resolveStateDir(stateDir);
+    const isDesktopMode = mode === "dev:desktop";
 
     const output: NodeJS.ProcessEnv = {
       ...baseEnv,
-      OCICODE_PORT: String(serverPort),
       PORT: String(webPort),
       ELECTRON_RENDERER_PORT: String(webPort),
-      VITE_WS_URL: `ws://localhost:${serverPort}`,
       VITE_DEV_SERVER_URL: devUrl?.toString() ?? `http://localhost:${webPort}`,
       OCICODE_STATE_DIR: resolvedStateDir,
     };
 
-    if (host !== undefined) {
+    if (!isDesktopMode) {
+      output.OCICODE_PORT = String(serverPort);
+      output.VITE_WS_URL = `ws://localhost:${serverPort}`;
+    } else {
+      delete output.OCICODE_PORT;
+      delete output.VITE_WS_URL;
+      delete output.OCICODE_AUTH_TOKEN;
+      delete output.OCICODE_MODE;
+      delete output.OCICODE_NO_BROWSER;
+      delete output.OCICODE_HOST;
+    }
+
+    if (!isDesktopMode && host !== undefined) {
       output.OCICODE_HOST = host;
     }
 
-    if (authToken !== undefined) {
+    if (!isDesktopMode && authToken !== undefined) {
       output.OCICODE_AUTH_TOKEN = authToken;
-    } else {
+    } else if (!isDesktopMode) {
       delete output.OCICODE_AUTH_TOKEN;
     }
 
-    if (noBrowser !== undefined) {
+    if (!isDesktopMode && noBrowser !== undefined) {
       output.OCICODE_NO_BROWSER = noBrowser ? "1" : "0";
-    } else {
+    } else if (!isDesktopMode) {
       delete output.OCICODE_NO_BROWSER;
     }
 
@@ -195,6 +206,10 @@ export function createDevRunnerEnv({
 
     if (mode === "dev:server" || mode === "dev:web") {
       output.OCICODE_MODE = "web";
+      delete output.OCICODE_DESKTOP_WS_URL;
+    }
+
+    if (isDesktopMode) {
       delete output.OCICODE_DESKTOP_WS_URL;
     }
 

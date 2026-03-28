@@ -4,12 +4,7 @@ import { SquarePenIcon } from "lucide-react";
 import { isElectron } from "../env";
 import { SidebarTrigger, useSidebar } from "../components/ui/sidebar";
 import { OciWordmark } from "../components/OciWordmark";
-import {
-  Empty,
-  EmptyDescription,
-  EmptyHeader,
-  EmptyTitle,
-} from "../components/ui/empty";
+import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from "../components/ui/empty";
 import { Button } from "../components/ui/button";
 
 function ChatIndexRouteView() {
@@ -43,8 +38,8 @@ function ChatIndexRouteView() {
               Start from a thread or open a project.
             </EmptyTitle>
             <EmptyDescription className="max-w-md text-sm leading-6 text-muted-foreground/66">
-              Use the sidebar to jump back into recent work, or create a new thread for the
-              project you want to change next.
+              Use the sidebar to jump back into recent work, or create a new thread for the project
+              you want to change next.
             </EmptyDescription>
           </div>
         </EmptyHeader>

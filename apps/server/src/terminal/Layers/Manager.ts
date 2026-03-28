@@ -8,6 +8,7 @@ import {
   TerminalCloseInput,
   TerminalOpenInput,
   TerminalResizeInput,
+  TerminalRestartInput,
   TerminalWriteInput,
   type TerminalEvent,
   type TerminalSessionSnapshot,
@@ -37,6 +38,7 @@ const DEFAULT_OPEN_ROWS = 30;
 const TERMINAL_ENV_BLOCKLIST = new Set(["PORT", "ELECTRON_RENDERER_PORT", "ELECTRON_RUN_AS_NODE"]);
 
 const decodeTerminalOpenInput = Schema.decodeUnknownSync(TerminalOpenInput);
+const decodeTerminalRestartInput = Schema.decodeUnknownSync(TerminalRestartInput);
 const decodeTerminalWriteInput = Schema.decodeUnknownSync(TerminalWriteInput);
 const decodeTerminalResizeInput = Schema.decodeUnknownSync(TerminalResizeInput);
 const decodeTerminalClearInput = Schema.decodeUnknownSync(TerminalClearInput);
@@ -252,6 +254,176 @@ function capHistory(history: string, maxLines: number): string {
   return hasTrailingNewline ? `${capped}\n` : capped;
 }
 
+function isCsiFinalByte(codePoint: number): boolean {
+  return codePoint >= 0x40 && codePoint <= 0x7e;
+}
+
+function shouldStripCsiSequence(body: string, finalByte: string): boolean {
+  if (finalByte === "n") {
+    return true;
+  }
+  if (finalByte === "R" && /^[0-9;?]*$/.test(body)) {
+    return true;
+  }
+  if (finalByte === "c" && /^[>0-9;?]*$/.test(body)) {
+    return true;
+  }
+  return false;
+}
+
+function shouldStripOscSequence(content: string): boolean {
+  return /^(10|11|12);(?:\?|rgb:)/.test(content);
+}
+
+function stripStringTerminator(value: string): string {
+  if (value.endsWith("\u001b\\")) {
+    return value.slice(0, -2);
+  }
+  const lastCharacter = value.at(-1);
+  if (lastCharacter === "\u0007" || lastCharacter === "\u009c") {
+    return value.slice(0, -1);
+  }
+  return value;
+}
+
+function findStringTerminatorIndex(input: string, start: number): number | null {
+  for (let index = start; index < input.length; index += 1) {
+    const codePoint = input.charCodeAt(index);
+    if (codePoint === 0x07 || codePoint === 0x9c) {
+      return index + 1;
+    }
+    if (codePoint === 0x1b && input.charCodeAt(index + 1) === 0x5c) {
+      return index + 2;
+    }
+  }
+  return null;
+}
+
+function isEscapeIntermediateByte(codePoint: number): boolean {
+  return codePoint >= 0x20 && codePoint <= 0x2f;
+}
+
+function isEscapeFinalByte(codePoint: number): boolean {
+  return codePoint >= 0x30 && codePoint <= 0x7e;
+}
+
+function findEscapeSequenceEndIndex(input: string, start: number): number | null {
+  let cursor = start;
+  while (cursor < input.length && isEscapeIntermediateByte(input.charCodeAt(cursor))) {
+    cursor += 1;
+  }
+  if (cursor >= input.length) {
+    return null;
+  }
+  return isEscapeFinalByte(input.charCodeAt(cursor)) ? cursor + 1 : start + 1;
+}
+
+function sanitizeTerminalHistoryChunk(
+  pendingControlSequence: string,
+  data: string,
+): { visibleText: string; pendingControlSequence: string } {
+  const input = `${pendingControlSequence}${data}`;
+  let visibleText = "";
+  let index = 0;
+
+  while (index < input.length) {
+    const codePoint = input.charCodeAt(index);
+
+    if (codePoint === 0x1b) {
+      const nextCodePoint = input.charCodeAt(index + 1);
+      if (Number.isNaN(nextCodePoint)) {
+        return { visibleText, pendingControlSequence: input.slice(index) };
+      }
+
+      if (nextCodePoint === 0x5b) {
+        let cursor = index + 2;
+        while (cursor < input.length) {
+          if (isCsiFinalByte(input.charCodeAt(cursor))) {
+            const sequence = input.slice(index, cursor + 1);
+            const body = input.slice(index + 2, cursor);
+            if (!shouldStripCsiSequence(body, input[cursor] ?? "")) {
+              visibleText += sequence;
+            }
+            index = cursor + 1;
+            break;
+          }
+          cursor += 1;
+        }
+        if (cursor >= input.length) {
+          return { visibleText, pendingControlSequence: input.slice(index) };
+        }
+        continue;
+      }
+
+      if (
+        nextCodePoint === 0x5d ||
+        nextCodePoint === 0x50 ||
+        nextCodePoint === 0x5e ||
+        nextCodePoint === 0x5f
+      ) {
+        const terminatorIndex = findStringTerminatorIndex(input, index + 2);
+        if (terminatorIndex === null) {
+          return { visibleText, pendingControlSequence: input.slice(index) };
+        }
+        const sequence = input.slice(index, terminatorIndex);
+        const content = stripStringTerminator(input.slice(index + 2, terminatorIndex));
+        if (nextCodePoint !== 0x5d || !shouldStripOscSequence(content)) {
+          visibleText += sequence;
+        }
+        index = terminatorIndex;
+        continue;
+      }
+
+      const escapeSequenceEndIndex = findEscapeSequenceEndIndex(input, index + 1);
+      if (escapeSequenceEndIndex === null) {
+        return { visibleText, pendingControlSequence: input.slice(index) };
+      }
+      visibleText += input.slice(index, escapeSequenceEndIndex);
+      index = escapeSequenceEndIndex;
+      continue;
+    }
+
+    if (codePoint === 0x9b) {
+      let cursor = index + 1;
+      while (cursor < input.length) {
+        if (isCsiFinalByte(input.charCodeAt(cursor))) {
+          const sequence = input.slice(index, cursor + 1);
+          const body = input.slice(index + 1, cursor);
+          if (!shouldStripCsiSequence(body, input[cursor] ?? "")) {
+            visibleText += sequence;
+          }
+          index = cursor + 1;
+          break;
+        }
+        cursor += 1;
+      }
+      if (cursor >= input.length) {
+        return { visibleText, pendingControlSequence: input.slice(index) };
+      }
+      continue;
+    }
+
+    if (codePoint === 0x9d || codePoint === 0x90 || codePoint === 0x9e || codePoint === 0x9f) {
+      const terminatorIndex = findStringTerminatorIndex(input, index + 1);
+      if (terminatorIndex === null) {
+        return { visibleText, pendingControlSequence: input.slice(index) };
+      }
+      const sequence = input.slice(index, terminatorIndex);
+      const content = stripStringTerminator(input.slice(index + 1, terminatorIndex));
+      if (codePoint !== 0x9d || !shouldStripOscSequence(content)) {
+        visibleText += sequence;
+      }
+      index = terminatorIndex;
+      continue;
+    }
+
+    visibleText += input[index] ?? "";
+    index += 1;
+  }
+
+  return { visibleText, pendingControlSequence: "" };
+}
+
 function legacySafeThreadId(threadId: string): string {
   return threadId.replace(/[^a-zA-Z0-9._-]/g, "_");
 }
@@ -376,6 +548,7 @@ export class TerminalManagerRuntime extends EventEmitter<TerminalManagerEvents> 
           status: "starting",
           pid: null,
           history,
+          pendingHistoryControlSequence: "",
           exitCode: null,
           exitSignal: null,
           updatedAt: new Date().toISOString(),
@@ -405,10 +578,12 @@ export class TerminalManagerRuntime extends EventEmitter<TerminalManagerEvents> 
         existing.cwd = input.cwd;
         existing.runtimeEnv = nextRuntimeEnv;
         existing.history = "";
+        existing.pendingHistoryControlSequence = "";
         await this.persistHistory(existing.threadId, existing.terminalId, existing.history);
       } else if (existing.status === "exited" || existing.status === "error") {
         existing.runtimeEnv = nextRuntimeEnv;
         existing.history = "";
+        existing.pendingHistoryControlSequence = "";
         await this.persistHistory(existing.threadId, existing.terminalId, existing.history);
       } else if (currentRuntimeEnv !== nextRuntimeEnv) {
         existing.runtimeEnv = nextRuntimeEnv;
@@ -467,6 +642,7 @@ export class TerminalManagerRuntime extends EventEmitter<TerminalManagerEvents> 
     await this.runWithThreadLock(input.threadId, async () => {
       const session = this.requireSession(input.threadId, input.terminalId);
       session.history = "";
+      session.pendingHistoryControlSequence = "";
       session.updatedAt = new Date().toISOString();
       await this.persistHistory(input.threadId, input.terminalId, session.history);
       this.emitEvent({
@@ -478,8 +654,8 @@ export class TerminalManagerRuntime extends EventEmitter<TerminalManagerEvents> 
     });
   }
 
-  async restart(raw: TerminalOpenInput): Promise<TerminalSessionSnapshot> {
-    const input = decodeTerminalOpenInput(raw);
+  async restart(raw: TerminalRestartInput): Promise<TerminalSessionSnapshot> {
+    const input = decodeTerminalRestartInput(raw);
     return this.runWithThreadLock(input.threadId, async () => {
       await this.assertValidCwd(input.cwd);
 
@@ -495,6 +671,7 @@ export class TerminalManagerRuntime extends EventEmitter<TerminalManagerEvents> 
           status: "starting",
           pid: null,
           history: "",
+          pendingHistoryControlSequence: "",
           exitCode: null,
           exitSignal: null,
           updatedAt: new Date().toISOString(),
@@ -518,6 +695,7 @@ export class TerminalManagerRuntime extends EventEmitter<TerminalManagerEvents> 
       const rows = input.rows ?? session.rows;
 
       session.history = "";
+      session.pendingHistoryControlSequence = "";
       await this.persistHistory(input.threadId, input.terminalId, session.history);
       await this.startSession(session, { ...input, cols, rows }, "restarted");
       return this.snapshot(session);
@@ -692,9 +870,16 @@ export class TerminalManagerRuntime extends EventEmitter<TerminalManagerEvents> 
   }
 
   private onProcessData(session: TerminalSessionState, data: string): void {
-    session.history = capHistory(`${session.history}${data}`, this.historyLineLimit);
+    const sanitized = sanitizeTerminalHistoryChunk(session.pendingHistoryControlSequence, data);
+    session.pendingHistoryControlSequence = sanitized.pendingControlSequence;
+    if (sanitized.visibleText.length > 0) {
+      session.history = capHistory(
+        `${session.history}${sanitized.visibleText}`,
+        this.historyLineLimit,
+      );
+      this.queuePersist(session.threadId, session.terminalId, session.history);
+    }
     session.updatedAt = new Date().toISOString();
-    this.queuePersist(session.threadId, session.terminalId, session.history);
     this.emitEvent({
       type: "output",
       threadId: session.threadId,
@@ -711,6 +896,7 @@ export class TerminalManagerRuntime extends EventEmitter<TerminalManagerEvents> 
     session.pid = null;
     session.hasRunningSubprocess = false;
     session.status = "exited";
+    session.pendingHistoryControlSequence = "";
     session.exitCode = Number.isInteger(event.exitCode) ? event.exitCode : null;
     session.exitSignal = Number.isInteger(event.signal) ? event.signal : null;
     session.updatedAt = new Date().toISOString();
@@ -734,6 +920,7 @@ export class TerminalManagerRuntime extends EventEmitter<TerminalManagerEvents> 
     session.pid = null;
     session.hasRunningSubprocess = false;
     session.status = "exited";
+    session.pendingHistoryControlSequence = "";
     session.updatedAt = new Date().toISOString();
     this.killProcessWithEscalation(process, session.threadId, session.terminalId);
     this.evictInactiveSessionsIfNeeded();

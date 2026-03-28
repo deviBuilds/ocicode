@@ -8,12 +8,13 @@
  *
  * @module ProviderHealthLive
  */
+import * as OS from "node:os";
 import type {
   ServerProviderAuthStatus,
   ServerProviderStatus,
   ServerProviderStatusState,
 } from "@ocicode/contracts";
-import { Array, Effect, Fiber, Layer, Option, Result, Stream } from "effect";
+import { Array, Effect, Fiber, FileSystem, Layer, Option, Path, Result, Stream } from "effect";
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
 
 import {
@@ -167,6 +168,49 @@ export function parseAuthStatusFromOutput(result: CommandResult): {
   };
 }
 
+const OPENAI_AUTH_PROVIDERS = new Set(["openai"]);
+
+export const readCodexConfigModelProvider = Effect.gen(function* () {
+  const fileSystem = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
+  const codexHome = process.env.CODEX_HOME || path.join(OS.homedir(), ".codex");
+  const configPath = path.join(codexHome, "config.toml");
+  const content = yield* fileSystem
+    .readFileString(configPath)
+    .pipe(Effect.orElseSucceed(() => undefined));
+
+  if (content === undefined) {
+    return undefined;
+  }
+
+  let inTopLevel = true;
+  for (const line of content.split("\n")) {
+    const trimmed = line.trim();
+    if (!trimmed || trimmed.startsWith("#")) {
+      continue;
+    }
+    if (trimmed.startsWith("[")) {
+      inTopLevel = false;
+      continue;
+    }
+    if (!inTopLevel) {
+      continue;
+    }
+
+    const match = trimmed.match(/^model_provider\s*=\s*["']([^"']+)["']/);
+    if (match?.[1]) {
+      return match[1];
+    }
+  }
+
+  return undefined;
+});
+
+export const hasCustomModelProvider = Effect.map(
+  readCodexConfigModelProvider,
+  (provider) => provider !== undefined && !OPENAI_AUTH_PROVIDERS.has(provider),
+);
+
 // ── Effect-native command execution ─────────────────────────────────
 
 const collectStreamAsString = <E>(stream: Stream.Stream<Uint8Array, E>): Effect.Effect<string, E> =>
@@ -202,7 +246,7 @@ const runCodexCommand = (args: ReadonlyArray<string>) =>
 export const checkCodexProviderStatus: Effect.Effect<
   ServerProviderStatus,
   never,
-  ChildProcessSpawner.ChildProcessSpawner
+  ChildProcessSpawner.ChildProcessSpawner | FileSystem.FileSystem | Path.Path
 > = Effect.gen(function* () {
   const checkedAt = new Date().toISOString();
 
@@ -262,6 +306,17 @@ export const checkCodexProviderStatus: Effect.Effect<
       checkedAt,
       message: formatCodexCliUpgradeMessage(parsedVersion),
     };
+  }
+
+  if (yield* hasCustomModelProvider) {
+    return {
+      provider: CODEX_PROVIDER,
+      status: "ready" as const,
+      available: true,
+      authStatus: "unknown" as const,
+      checkedAt,
+      message: "Using a custom Codex model provider; OpenAI login check skipped.",
+    } satisfies ServerProviderStatus;
   }
 
   // Probe 2: `codex login status` — is the user authenticated?

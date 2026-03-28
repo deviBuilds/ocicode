@@ -88,4 +88,6 @@ export interface ProjectionPendingApprovalRepositoryShape {
 export class ProjectionPendingApprovalRepository extends ServiceMap.Service<
   ProjectionPendingApprovalRepository,
   ProjectionPendingApprovalRepositoryShape
->()("ocicode/persistence/Services/ProjectionPendingApprovals/ProjectionPendingApprovalRepository") {}
+>()(
+  "ocicode/persistence/Services/ProjectionPendingApprovals/ProjectionPendingApprovalRepository",
+) {}

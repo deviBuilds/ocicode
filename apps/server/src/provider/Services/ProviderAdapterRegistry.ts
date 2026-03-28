@@ -1,7 +1,7 @@
 /**
  * ProviderAdapterRegistry - Lookup boundary for provider adapter implementations.
  *
- * Maps a provider kind to the concrete adapter service (Codex, Claude, etc).
+ * Maps a provider kind to the concrete adapter service.
  * It does not own session lifecycle or routing rules; `ProviderService` uses
  * this registry together with `ProviderSessionDirectory`.
  *

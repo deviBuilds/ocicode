@@ -142,6 +142,37 @@ it.layer(NodeServices.layer)("dev-runner", (it) => {
         assert.equal(env.OCICODE_LOG_WS_EVENTS, "0");
       }),
     );
+
+    it.effect("keeps sensitive server bootstrap env out of dev:desktop mode", () =>
+      Effect.gen(function* () {
+        const env = yield* createDevRunnerEnv({
+          mode: "dev:desktop",
+          baseEnv: {
+            OCICODE_AUTH_TOKEN: "stale-token",
+            OCICODE_MODE: "web",
+            OCICODE_HOST: "0.0.0.0",
+            OCICODE_NO_BROWSER: "0",
+          },
+          serverOffset: 0,
+          webOffset: 0,
+          stateDir: undefined,
+          authToken: "secret",
+          noBrowser: true,
+          autoBootstrapProjectFromCwd: undefined,
+          logWebSocketEvents: undefined,
+          host: "127.0.0.1",
+          port: undefined,
+          devUrl: undefined,
+        });
+
+        assert.equal(env.OCICODE_PORT, undefined);
+        assert.equal(env.VITE_WS_URL, undefined);
+        assert.equal(env.OCICODE_AUTH_TOKEN, undefined);
+        assert.equal(env.OCICODE_MODE, undefined);
+        assert.equal(env.OCICODE_HOST, undefined);
+        assert.equal(env.OCICODE_NO_BROWSER, undefined);
+      }),
+    );
   });
 
   describe("findFirstAvailableOffset", () => {

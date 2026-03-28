@@ -91,12 +91,7 @@ function getBranchMetaLabel(input: {
 
 function BranchGlyph({ className }: { className?: string }) {
   return (
-    <svg
-      viewBox="0 0 16 16"
-      fill="none"
-      aria-hidden="true"
-      className={className}
-    >
+    <svg viewBox="0 0 16 16" fill="none" aria-hidden="true" className={className}>
       <circle cx="4" cy="3.5" r="1.75" stroke="currentColor" strokeWidth="1.5" />
       <circle cx="4" cy="12.5" r="1.75" stroke="currentColor" strokeWidth="1.5" />
       <circle cx="11.75" cy="5.5" r="1.75" stroke="currentColor" strokeWidth="1.5" />
@@ -152,7 +147,9 @@ export function BranchToolbarBranchSelector({
     () =>
       normalizedBranchQuery.length === 0
         ? branchNames
-        : branchNames.filter((itemValue) => itemValue.toLowerCase().includes(normalizedBranchQuery)),
+        : branchNames.filter((itemValue) =>
+            itemValue.toLowerCase().includes(normalizedBranchQuery),
+          ),
     [branchNames, normalizedBranchQuery],
   );
   const [resolvedActiveBranch, setOptimisticBranch] = useOptimistic(
@@ -404,7 +401,8 @@ export function BranchToolbarBranchSelector({
                       {hasWorkingTreeChanges ? (
                         <div className="branch-row-meta mt-1 flex flex-wrap items-center gap-1.5 text-[12px] text-white/42 transition-colors duration-150">
                           <span>
-                            Uncommitted: {changedFilesCount} file{changedFilesCount === 1 ? "" : "s"}
+                            Uncommitted: {changedFilesCount} file
+                            {changedFilesCount === 1 ? "" : "s"}
                           </span>
                           <span className="font-medium text-[#39cf89]">
                             +{branchStatusQuery.data?.workingTree.insertions ?? 0}

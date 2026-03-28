@@ -26,34 +26,17 @@ interface BranchToolbarProps {
   onComposerFocusRequest?: () => void;
 }
 
-function StatusPill({
-  children,
-}: {
-  children: ReactNode;
-}) {
+function StatusPill({ children }: { children: ReactNode }) {
   return (
-    <span
-      className="inline-flex h-8 items-center rounded-full border border-border/80 bg-background/72 px-3 text-[11px] font-medium tracking-[0.01em] text-muted-foreground/82"
-    >
+    <span className="inline-flex h-8 items-center rounded-full border border-border/80 bg-background/72 px-3 text-[11px] font-medium tracking-[0.01em] text-muted-foreground/82">
       {children}
     </span>
   );
 }
 
-function RuntimeModeIcon({
-  mode,
-  className,
-}: {
-  mode: RuntimeMode;
-  className?: string;
-}) {
+function RuntimeModeIcon({ mode, className }: { mode: RuntimeMode; className?: string }) {
   return (
-    <svg
-      viewBox="0 0 20 20"
-      fill="none"
-      aria-hidden="true"
-      className={className}
-    >
+    <svg viewBox="0 0 20 20" fill="none" aria-hidden="true" className={className}>
       <path
         d="M10 1.9 16.2 4.8v4.8c0 4.2-2.6 7.2-6.2 8.5-3.6-1.3-6.2-4.3-6.2-8.5V4.8L10 1.9Z"
         stroke="currentColor"
@@ -62,12 +45,7 @@ function RuntimeModeIcon({
       />
       {mode === "full-access" ? (
         <>
-          <path
-            d="M10 6.2v4.2"
-            stroke="currentColor"
-            strokeWidth="1.8"
-            strokeLinecap="round"
-          />
+          <path d="M10 6.2v4.2" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
           <circle cx="10" cy="13.6" r="1.05" fill="currentColor" />
         </>
       ) : (
@@ -218,7 +196,10 @@ export default function BranchToolbar({
             render={<Button type="button" variant="ghost" size="xs" aria-label="Runtime mode" />}
             className={`h-8 rounded-full border px-3 text-[11px] font-medium shadow-xs/5 ${activeRuntimeMode.triggerClassName}`}
           >
-            <RuntimeModeIcon mode={runtimeMode} className={`size-4 ${activeRuntimeMode.iconClassName}`} />
+            <RuntimeModeIcon
+              mode={runtimeMode}
+              className={`size-4 ${activeRuntimeMode.iconClassName}`}
+            />
             <span>{activeRuntimeMode.label}</span>
             <ChevronDownIcon className="size-3.5 opacity-80" />
           </MenuTrigger>
@@ -236,7 +217,10 @@ export default function BranchToolbar({
                   className="min-h-12 rounded-[1rem] px-3 py-2 text-[15px] text-white data-highlighted:bg-white/6 data-highlighted:text-white"
                   onClick={() => onRuntimeModeChange(modeOption)}
                 >
-                  <RuntimeModeIcon mode={modeOption} className={`size-5 ${optionMeta.iconClassName}`} />
+                  <RuntimeModeIcon
+                    mode={modeOption}
+                    className={`size-5 ${optionMeta.iconClassName}`}
+                  />
                   <span className="flex-1">{optionMeta.label}</span>
                   {selected ? <CheckIcon className="size-4.5 text-white" /> : null}
                 </MenuItem>

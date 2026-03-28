@@ -34,6 +34,24 @@ describe("resolveEditorLaunch", () => {
         args: ["/tmp/workspace"],
       });
 
+      const vscodeInsidersLaunch = yield* resolveEditorLaunch(
+        { cwd: "/tmp/workspace", editor: "vscode-insiders" },
+        "darwin",
+      );
+      assert.deepEqual(vscodeInsidersLaunch, {
+        command: "code-insiders",
+        args: ["/tmp/workspace"],
+      });
+
+      const vscodiumLaunch = yield* resolveEditorLaunch(
+        { cwd: "/tmp/workspace", editor: "vscodium" },
+        "darwin",
+      );
+      assert.deepEqual(vscodiumLaunch, {
+        command: "codium",
+        args: ["/tmp/workspace"],
+      });
+
       const zedLaunch = yield* resolveEditorLaunch(
         { cwd: "/tmp/workspace", editor: "zed" },
         "darwin",
@@ -71,6 +89,24 @@ describe("resolveEditorLaunch", () => {
       );
       assert.deepEqual(vscodeLineAndColumn, {
         command: "code",
+        args: ["--goto", "/tmp/workspace/src/open.ts:71:5"],
+      });
+
+      const vscodeInsidersLineAndColumn = yield* resolveEditorLaunch(
+        { cwd: "/tmp/workspace/src/open.ts:71:5", editor: "vscode-insiders" },
+        "darwin",
+      );
+      assert.deepEqual(vscodeInsidersLineAndColumn, {
+        command: "code-insiders",
+        args: ["--goto", "/tmp/workspace/src/open.ts:71:5"],
+      });
+
+      const vscodiumLineAndColumn = yield* resolveEditorLaunch(
+        { cwd: "/tmp/workspace/src/open.ts:71:5", editor: "vscodium" },
+        "darwin",
+      );
+      assert.deepEqual(vscodiumLineAndColumn, {
+        command: "codium",
         args: ["--goto", "/tmp/workspace/src/open.ts:71:5"],
       });
 
@@ -209,12 +245,14 @@ describe("resolveAvailableEditors", () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), "ocicode-editors-"));
     try {
       fs.writeFileSync(path.join(dir, "cursor.CMD"), "@echo off\r\n", "utf8");
+      fs.writeFileSync(path.join(dir, "code-insiders.CMD"), "@echo off\r\n", "utf8");
+      fs.writeFileSync(path.join(dir, "codium.CMD"), "@echo off\r\n", "utf8");
       fs.writeFileSync(path.join(dir, "explorer.EXE"), "MZ", "utf8");
       const editors = resolveAvailableEditors("win32", {
         PATH: dir,
         PATHEXT: ".COM;.EXE;.BAT;.CMD",
       });
-      assert.deepEqual(editors, ["cursor", "file-manager"]);
+      assert.deepEqual(editors, ["cursor", "vscode-insiders", "vscodium", "file-manager"]);
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }

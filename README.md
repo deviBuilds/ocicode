@@ -1,6 +1,6 @@
 # OCI Code
 
-OCI Code is a minimal web GUI for coding agents. Currently Codex-first, with Claude Code support coming soon.
+OCI Code is a minimal web GUI for coding agents. It is currently Codex-only.
 OCI Code does not send product telemetry.
 
 ## Migration from T3 Code

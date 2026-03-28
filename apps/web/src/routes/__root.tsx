@@ -22,6 +22,7 @@ import { preferredTerminalEditor } from "../terminal-links";
 import { terminalRunningSubprocessFromEvent } from "../terminalActivity";
 import { onServerConfigUpdated, onServerWelcome } from "../wsNativeApi";
 import { providerQueryKeys } from "../lib/providerReactQuery";
+import { projectQueryKeys } from "../lib/projectReactQuery";
 import { collectActiveTerminalThreadIds } from "../lib/terminalStateCleanup";
 
 export const Route = createRootRouteWithContext<{
@@ -192,6 +193,7 @@ function EventRouter() {
         if (needsProviderInvalidation) {
           needsProviderInvalidation = false;
           void queryClient.invalidateQueries({ queryKey: providerQueryKeys.all });
+          void queryClient.invalidateQueries({ queryKey: projectQueryKeys.all });
         }
         void syncSnapshot();
       },

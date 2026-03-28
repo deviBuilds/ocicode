@@ -1,12 +1,14 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  collapseExpandedComposerCursor,
   detectComposerTrigger,
   expandCollapsedComposerCursor,
   isCollapsedCursorAdjacentToMention,
   parseStandaloneComposerSlashCommand,
   replaceTextRange,
 } from "./composer-logic";
+import { INLINE_TERMINAL_CONTEXT_PLACEHOLDER } from "./lib/terminalContext";
 
 describe("detectComposerTrigger", () => {
   it("detects @path trigger at cursor", () => {
@@ -89,6 +91,18 @@ describe("expandCollapsedComposerCursor", () => {
     const expandedCursor = expandCollapsedComposerCursor(text, collapsedCursorAfterMention);
 
     expect(detectComposerTrigger(text, expandedCursor)).toBeNull();
+  });
+
+  it("keeps terminal-context placeholders aligned between collapsed and expanded cursors", () => {
+    const text = `Inspect ${INLINE_TERMINAL_CONTEXT_PLACEHOLDER} this`;
+    const cursorAfterPlaceholder = "Inspect ".length + 1;
+
+    expect(expandCollapsedComposerCursor(text, cursorAfterPlaceholder)).toBe(
+      cursorAfterPlaceholder,
+    );
+    expect(collapseExpandedComposerCursor(text, cursorAfterPlaceholder)).toBe(
+      cursorAfterPlaceholder,
+    );
   });
 });
 
