@@ -81,7 +81,7 @@ export function makeServerProviderLayer(): Layer.Layer<
           Layer.provide(
             yield* Effect.promise(() =>
               import("./provider/Layers/ClaudeAdapter").then((module) =>
-                module.makeClaudeAdapterLive(),
+                module.makeClaudeAdapterLive(nativeEventLogger ? { nativeEventLogger } : undefined),
               ),
             ),
           ),

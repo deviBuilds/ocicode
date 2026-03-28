@@ -4,6 +4,7 @@ import {
   query,
   type CanUseTool,
   type Options as ClaudeQueryOptions,
+  type PermissionMode,
   type PermissionResult,
   type Query as ClaudeQuery,
   type SDKMessage,
@@ -13,11 +14,15 @@ import {
 import {
   ApprovalRequestId,
   EventId,
+  ProviderItemId,
+  type CanonicalItemType,
   type CanonicalRequestType,
   type ProviderApprovalDecision,
   type ProviderRuntimeEvent,
+  type ProviderRuntimeTurnStatus,
   RuntimeItemId,
   RuntimeRequestId,
+  type RuntimeContentStreamKind,
   type ProviderSendTurnInput,
   type ProviderSession,
   type ProviderSessionStartInput,
@@ -28,7 +33,7 @@ import {
 } from "@ocicode/contracts";
 import { getDefaultModel, normalizeModelSlug } from "@ocicode/shared/model";
 import { normalizeRemoteBridgeStartInput } from "@ocicode/shared/provider";
-import { Effect, FileSystem, Layer, Queue, Schema, Stream } from "effect";
+import { Cause, Effect, FileSystem, Fiber, Layer, Queue, Schema, Stream } from "effect";
 
 import { resolveAttachmentPath } from "../../attachmentStore.ts";
 import { ServerConfig } from "../../config.ts";
@@ -39,7 +44,8 @@ import {
   ProviderAdapterSessionNotFoundError,
   ProviderAdapterValidationError,
 } from "../Errors.ts";
-import { type ProviderToolHostShape, ProviderToolHost } from "../Services/ProviderToolHost.ts";
+import { type EventNdjsonLogger, makeEventNdjsonLogger } from "./EventNdjsonLogger.ts";
+import { ProviderToolHost } from "../Services/ProviderToolHost.ts";
 import { type ClaudeAdapterShape, ClaudeAdapter } from "../Services/ClaudeAdapter.ts";
 import {
   buildClaudePromptText,
@@ -58,6 +64,7 @@ import { buildWorkspaceProxyProcessConfig, buildWorkspaceProxyUrl } from "../wor
 
 const PROVIDER = "claudeAgent" as const;
 const DEFAULT_MODEL = getDefaultModel(PROVIDER);
+const CLAUDE_SETTING_SOURCES = ["user", "project", "local"] as const;
 const WORKSPACE_PROXY_SYSTEM_PROMPT = [
   "Remote provider mode is active.",
   "Use the local workspace MCP tools for reading files, editing files, and running commands.",
@@ -82,6 +89,30 @@ type ClaudeResumeState = {
   readonly resumeSessionAt?: string;
 };
 
+type PromptQueueItem =
+  | {
+      readonly type: "message";
+      readonly message: SDKUserMessage;
+    }
+  | {
+      readonly type: "terminate";
+    };
+
+type ClaudeTextStreamKind = Extract<RuntimeContentStreamKind, "assistant_text" | "reasoning_text">;
+type ClaudeToolResultStreamKind = Extract<
+  RuntimeContentStreamKind,
+  "command_output" | "file_change_output"
+>;
+
+type AssistantTextBlockState = {
+  readonly itemId: string;
+  readonly blockIndex: number;
+  emittedTextDelta: boolean;
+  fallbackText: string;
+  streamClosed: boolean;
+  completionEmitted: boolean;
+};
+
 type PendingApproval = {
   readonly requestId: ApprovalRequestId;
   readonly requestType: CanonicalRequestType;
@@ -101,39 +132,59 @@ type ClaudeTurnSnapshot = {
   assistantUuid?: string;
 };
 
-type ClaudeSessionContext = {
-  session: ProviderSession;
-  turns: Array<ClaudeTurnSnapshot>;
-  pendingApprovals: Map<ApprovalRequestId, PendingApproval>;
-  pendingUserInputs: Map<ApprovalRequestId, PendingUserInput>;
-  resumeSessionId: string | undefined;
-  resumeSessionAt: string | undefined;
-  activeQuery: ClaudeQuery | undefined;
-  workspaceProxy: WorkspaceProxyConfig | undefined;
-  binaryPath: string | undefined;
+type ClaudeTurnState = {
+  readonly turnId: TurnId;
+  readonly startedAt: string;
+  readonly items: Array<unknown>;
+  readonly assistantTextBlocks: Map<number, AssistantTextBlockState>;
+  readonly assistantTextBlockOrder: Array<AssistantTextBlockState>;
+  readonly capturedProposedPlanKeys: Set<string>;
+  nextSyntheticAssistantBlockIndex: number;
+  assistantUuid?: string;
 };
 
-type LocalClaudeRuntime = {
-  readonly localSessions: Map<ThreadId, ClaudeSessionContext>;
-  readonly runtimeEventQueue: Queue.Queue<ProviderRuntimeEvent>;
-  readonly providerToolHost: ProviderToolHostShape;
-  readonly fileSystem: FileSystem.FileSystem;
-  readonly serverConfig: {
-    readonly port: number;
-    readonly cwd: string;
-    readonly stateDir: string;
-  };
-  readonly createQuery: (input: {
-    readonly prompt: string | AsyncIterable<SDKUserMessage>;
-    readonly options: ClaudeQueryOptions;
-  }) => ClaudeQuery;
+type ToolInFlight = {
+  readonly itemId: string;
+  readonly itemType: CanonicalItemType;
+  readonly toolName: string;
+  readonly title: string;
+  readonly detail?: string;
+  readonly input: Record<string, unknown>;
+  readonly partialInputJson: string;
+  readonly lastEmittedInputFingerprint?: string;
+};
+
+type ClaudeSessionContext = {
+  session: ProviderSession;
+  readonly promptQueue: Queue.Queue<PromptQueueItem>;
+  readonly query: ClaudeQuery;
+  streamFiber: Fiber.Fiber<void, Error> | undefined;
+  readonly startedAt: string;
+  readonly basePermissionMode: PermissionMode | undefined;
+  currentModel: string | undefined;
+  readonly turns: Array<ClaudeTurnSnapshot>;
+  readonly pendingApprovals: Map<ApprovalRequestId, PendingApproval>;
+  readonly pendingUserInputs: Map<ApprovalRequestId, PendingUserInput>;
+  readonly inFlightTools: Map<number, ToolInFlight>;
+  turnState: ClaudeTurnState | undefined;
+  lastKnownContextWindow: number | undefined;
+  lastKnownTokenUsage: Record<string, unknown> | undefined;
+  lastAssistantUuid: string | undefined;
+  lastThreadStartedId: string | undefined;
+  resumeSessionId: string | undefined;
+  resumeSessionAt: string | undefined;
+  workspaceProxy: WorkspaceProxyConfig | undefined;
+  binaryPath: string | undefined;
+  stopped: boolean;
 };
 
 export interface ClaudeAdapterLiveOptions {
   readonly createQuery?: (input: {
-    readonly prompt: string | AsyncIterable<SDKUserMessage>;
+    readonly prompt: AsyncIterable<SDKUserMessage>;
     readonly options: ClaudeQueryOptions;
   }) => ClaudeQuery;
+  readonly nativeEventLogPath?: string;
+  readonly nativeEventLogger?: EventNdjsonLogger;
 }
 
 function toMessage(cause: unknown, fallback: string): string {
@@ -173,6 +224,43 @@ function readRemoteBridgeConfig(input: {
   return { baseUrl, sharedSecret };
 }
 
+function normalizeClaudeStreamMessages(cause: Cause.Cause<Error>): ReadonlyArray<string> {
+  const errors = Cause.prettyErrors(cause)
+    .map((error) => error.message.trim())
+    .filter((message) => message.length > 0);
+  if (errors.length > 0) {
+    return errors;
+  }
+
+  const squashed = toMessage(Cause.squash(cause), "").trim();
+  return squashed.length > 0 ? [squashed] : [];
+}
+
+function isClaudeInterruptedMessage(message: string): boolean {
+  const normalized = message.toLowerCase();
+  return (
+    normalized.includes("all fibers interrupted without error") ||
+    normalized.includes("request was aborted") ||
+    normalized.includes("interrupted by user")
+  );
+}
+
+function isClaudeInterruptedCause(cause: Cause.Cause<Error>): boolean {
+  return (
+    Cause.hasInterruptsOnly(cause) ||
+    normalizeClaudeStreamMessages(cause).some(isClaudeInterruptedMessage)
+  );
+}
+
+function messageFromClaudeStreamCause(cause: Cause.Cause<Error>, fallback: string): string {
+  return normalizeClaudeStreamMessages(cause)[0] ?? fallback;
+}
+
+function interruptionMessageFromClaudeCause(cause: Cause.Cause<Error>): string {
+  const message = messageFromClaudeStreamCause(cause, "Claude runtime interrupted.");
+  return isClaudeInterruptedMessage(message) ? "Claude runtime interrupted." : message;
+}
+
 function readResumeState(resumeCursor: unknown): ClaudeResumeState {
   if (!resumeCursor || typeof resumeCursor !== "object" || Array.isArray(resumeCursor)) {
     return {};
@@ -203,85 +291,118 @@ function providerEventBase(context: ClaudeSessionContext, input?: { turnId?: Tur
   } as const;
 }
 
-function extractAssistantText(message: SDKMessage): string {
-  if (message.type !== "assistant") {
-    return "";
-  }
-
-  const content =
-    typeof message.message === "object" &&
-    message.message !== null &&
-    "content" in message.message &&
-    Array.isArray((message.message as { content?: unknown }).content)
-      ? (message.message as { content: Array<unknown> }).content
-      : [];
-
-  return content
-    .map((block) => {
-      if (!block || typeof block !== "object") {
-        return "";
-      }
-      const candidate = block as { type?: unknown; text?: unknown; thinking?: unknown };
-      if (candidate.type === "text" && typeof candidate.text === "string") {
-        return candidate.text;
-      }
-      if (candidate.type === "thinking" && typeof candidate.thinking === "string") {
-        return candidate.thinking;
-      }
-      return "";
-    })
-    .filter((entry) => entry.length > 0)
-    .join("");
-}
-
-function extractTextDelta(
-  message: SDKMessage,
-): { streamKind: "assistant_text" | "reasoning_text"; delta: string } | undefined {
-  if (message.type !== "stream_event") {
-    return undefined;
-  }
-
-  const event = message.event as {
-    type?: unknown;
-    delta?: {
-      type?: unknown;
-      text?: unknown;
-      thinking?: unknown;
-    };
+function updateResumeCursor(context: ClaudeSessionContext): void {
+  context.session = {
+    ...context.session,
+    resumeCursor: {
+      threadId: context.session.threadId,
+      ...(context.resumeSessionId ? { resume: context.resumeSessionId } : {}),
+      ...(context.lastAssistantUuid ? { resumeSessionAt: context.lastAssistantUuid } : {}),
+      turnCount: context.turns.length,
+    },
+    updatedAt: new Date().toISOString(),
   };
-  if (event.type !== "content_block_delta") {
-    return undefined;
-  }
-  if (event.delta?.type === "text_delta" && typeof event.delta.text === "string") {
-    return { streamKind: "assistant_text", delta: event.delta.text };
-  }
-  if (event.delta?.type === "thinking_delta" && typeof event.delta.thinking === "string") {
-    return { streamKind: "reasoning_text", delta: event.delta.thinking };
-  }
-  return undefined;
 }
 
-function toolRequestType(toolName: string): CanonicalRequestType {
-  const normalized = toolName.toLowerCase();
-  if (normalized.includes("bash")) {
-    return "command_execution_approval";
+function resultErrorsText(result: SDKResultMessage): string {
+  return "errors" in result && Array.isArray(result.errors)
+    ? result.errors.join(" ").toLowerCase()
+    : "";
+}
+
+function isInterruptedResult(result: SDKResultMessage): boolean {
+  const errors = resultErrorsText(result);
+  if (errors.includes("interrupt")) {
+    return true;
   }
-  if (
-    normalized.includes("read") ||
-    normalized.includes("grep") ||
-    normalized.includes("glob") ||
-    normalized.includes("ls")
-  ) {
-    return "file_read_approval";
+
+  return (
+    result.subtype === "error_during_execution" &&
+    result.is_error === false &&
+    (errors.includes("request was aborted") ||
+      errors.includes("interrupted by user") ||
+      errors.includes("aborted"))
+  );
+}
+
+function asRuntimeItemId(value: string): RuntimeItemId {
+  return RuntimeItemId.makeUnsafe(value);
+}
+
+function maxClaudeContextWindowFromModelUsage(modelUsage: unknown): number | undefined {
+  if (!modelUsage || typeof modelUsage !== "object") {
+    return undefined;
   }
-  if (
-    normalized.includes("edit") ||
-    normalized.includes("write") ||
-    normalized.includes("multiedit")
-  ) {
-    return "file_change_approval";
+
+  let maxContextWindow: number | undefined;
+  for (const value of Object.values(modelUsage as Record<string, unknown>)) {
+    if (!value || typeof value !== "object") {
+      continue;
+    }
+    const contextWindow = (value as { contextWindow?: unknown }).contextWindow;
+    if (
+      typeof contextWindow !== "number" ||
+      !Number.isFinite(contextWindow) ||
+      contextWindow <= 0
+    ) {
+      continue;
+    }
+    maxContextWindow = Math.max(maxContextWindow ?? 0, contextWindow);
   }
-  return "unknown";
+
+  return maxContextWindow;
+}
+
+function normalizeClaudeTokenUsage(
+  usage: unknown,
+  contextWindow?: number,
+): Record<string, unknown> | undefined {
+  if (!usage || typeof usage !== "object") {
+    return undefined;
+  }
+
+  const record = usage as Record<string, unknown>;
+  const directUsedTokens =
+    typeof record.total_tokens === "number" && Number.isFinite(record.total_tokens)
+      ? record.total_tokens
+      : undefined;
+  const inputTokens =
+    (typeof record.input_tokens === "number" && Number.isFinite(record.input_tokens)
+      ? record.input_tokens
+      : 0) +
+    (typeof record.cache_creation_input_tokens === "number" &&
+    Number.isFinite(record.cache_creation_input_tokens)
+      ? record.cache_creation_input_tokens
+      : 0) +
+    (typeof record.cache_read_input_tokens === "number" &&
+    Number.isFinite(record.cache_read_input_tokens)
+      ? record.cache_read_input_tokens
+      : 0);
+  const outputTokens =
+    typeof record.output_tokens === "number" && Number.isFinite(record.output_tokens)
+      ? record.output_tokens
+      : 0;
+  const derivedUsedTokens = inputTokens + outputTokens;
+  const usedTokens = directUsedTokens ?? (derivedUsedTokens > 0 ? derivedUsedTokens : undefined);
+  if (usedTokens === undefined || usedTokens <= 0) {
+    return undefined;
+  }
+
+  return {
+    usedTokens,
+    lastUsedTokens: usedTokens,
+    ...(inputTokens > 0 ? { inputTokens } : {}),
+    ...(outputTokens > 0 ? { outputTokens } : {}),
+    ...(typeof contextWindow === "number" && Number.isFinite(contextWindow) && contextWindow > 0
+      ? { maxTokens: contextWindow }
+      : {}),
+    ...(typeof record.tool_uses === "number" && Number.isFinite(record.tool_uses)
+      ? { toolUses: record.tool_uses }
+      : {}),
+    ...(typeof record.duration_ms === "number" && Number.isFinite(record.duration_ms)
+      ? { durationMs: record.duration_ms }
+      : {}),
+  };
 }
 
 function isAskUserQuestionTool(toolName: string): boolean {
@@ -291,6 +412,117 @@ function isAskUserQuestionTool(toolName: string): boolean {
     normalized === "ask_user_question" ||
     normalized.includes("askuserquestion")
   );
+}
+
+function resultErrorMessage(result: SDKResultMessage): string | undefined {
+  if (result.subtype === "success") {
+    return undefined;
+  }
+  const message = result.errors.join(" ").trim();
+  return message.length > 0 ? message : undefined;
+}
+
+function classifyToolItemType(toolName: string): CanonicalItemType {
+  const normalized = toolName.toLowerCase();
+  if (
+    normalized === "task" ||
+    normalized === "agent" ||
+    normalized.includes("agent") ||
+    normalized.includes("subagent") ||
+    normalized.includes("sub-agent")
+  ) {
+    return "collab_agent_tool_call";
+  }
+  if (
+    normalized.includes("bash") ||
+    normalized.includes("command") ||
+    normalized.includes("shell") ||
+    normalized.includes("terminal")
+  ) {
+    return "command_execution";
+  }
+  if (
+    normalized.includes("edit") ||
+    normalized.includes("write") ||
+    normalized.includes("file") ||
+    normalized.includes("patch") ||
+    normalized.includes("replace") ||
+    normalized.includes("create") ||
+    normalized.includes("delete") ||
+    normalized.includes("multiedit")
+  ) {
+    return "file_change";
+  }
+  if (normalized.includes("mcp")) {
+    return "mcp_tool_call";
+  }
+  if (normalized.includes("websearch") || normalized.includes("web search")) {
+    return "web_search";
+  }
+  if (normalized.includes("image")) {
+    return "image_view";
+  }
+  return "dynamic_tool_call";
+}
+
+function isReadOnlyToolName(toolName: string): boolean {
+  const normalized = toolName.toLowerCase();
+  return (
+    normalized === "read" ||
+    normalized.includes("read file") ||
+    normalized.includes("view") ||
+    normalized.includes("grep") ||
+    normalized.includes("glob") ||
+    normalized.includes("search") ||
+    normalized.includes("ls")
+  );
+}
+
+function classifyRequestType(toolName: string): CanonicalRequestType {
+  if (isReadOnlyToolName(toolName)) {
+    return "file_read_approval";
+  }
+  const itemType = classifyToolItemType(toolName);
+  return itemType === "command_execution"
+    ? "command_execution_approval"
+    : itemType === "file_change"
+      ? "file_change_approval"
+      : "dynamic_tool_call";
+}
+
+function summarizeToolRequest(toolName: string, input: Record<string, unknown>): string {
+  const commandValue = input.command ?? input.cmd;
+  const command = typeof commandValue === "string" ? commandValue : undefined;
+  if (command && command.trim().length > 0) {
+    return `${toolName}: ${command.trim().slice(0, 400)}`;
+  }
+
+  const serialized = JSON.stringify(input);
+  if (serialized.length <= 400) {
+    return `${toolName}: ${serialized}`;
+  }
+  return `${toolName}: ${serialized.slice(0, 397)}...`;
+}
+
+function titleForTool(itemType: CanonicalItemType): string {
+  switch (itemType) {
+    case "command_execution":
+      return "Command run";
+    case "file_change":
+      return "File change";
+    case "mcp_tool_call":
+      return "MCP tool call";
+    case "collab_agent_tool_call":
+      return "Subagent task";
+    case "web_search":
+      return "Web search";
+    case "image_view":
+      return "Image view";
+    case "dynamic_tool_call":
+      return "Tool call";
+    default:
+      return "Item";
+  }
 }
 
 function parseClaudeUserInputQuestions(
@@ -341,51 +573,184 @@ function parseClaudeUserInputQuestions(
   return parsedQuestions;
 }
 
-function toolRequestDetail(toolName: string, input: Record<string, unknown>): string | undefined {
-  const path =
-    typeof input.file_path === "string"
-      ? input.file_path
-      : typeof input.path === "string"
-        ? input.path
-        : undefined;
-  if (typeof input.command === "string") {
-    return input.command;
-  }
-  if (path) {
-    return `${toolName}: ${path}`;
-  }
-  const serialized = JSON.stringify(input);
-  return serialized === "{}" ? toolName : `${toolName}: ${serialized}`;
+function streamKindFromDeltaType(deltaType: string): ClaudeTextStreamKind {
+  return deltaType.includes("thinking") ? "reasoning_text" : "assistant_text";
 }
 
-function isInterruptedResult(result: SDKResultMessage): boolean {
-  if (result.subtype !== "error_during_execution") {
-    return false;
+function nativeProviderRefs(
+  _context: ClaudeSessionContext,
+  options?: {
+    readonly providerItemId?: string | undefined;
+  },
+): NonNullable<ProviderRuntimeEvent["providerRefs"]> {
+  if (options?.providerItemId) {
+    return {
+      providerItemId: ProviderItemId.makeUnsafe(options.providerItemId),
+    };
   }
-  const text = result.errors.join(" ").toLowerCase();
-  return (
-    text.includes("interrupt") || text.includes("aborted") || text.includes("interrupted by user")
-  );
+  return {};
 }
 
-function resultErrorMessage(result: SDKResultMessage): string | undefined {
-  if (result.subtype === "success") {
+function extractAssistantTextBlocks(message: SDKMessage): Array<string> {
+  if (message.type !== "assistant") {
+    return [];
+  }
+
+  const content = (message.message as { content?: unknown } | undefined)?.content;
+  if (!Array.isArray(content)) {
+    return [];
+  }
+
+  const fragments: string[] = [];
+  for (const block of content) {
+    if (!block || typeof block !== "object") {
+      continue;
+    }
+    const candidate = block as { type?: unknown; text?: unknown };
+    if (
+      candidate.type === "text" &&
+      typeof candidate.text === "string" &&
+      candidate.text.length > 0
+    ) {
+      fragments.push(candidate.text);
+    }
+  }
+
+  return fragments;
+}
+
+function extractContentBlockText(block: unknown): string {
+  if (!block || typeof block !== "object") {
+    return "";
+  }
+
+  const candidate = block as { type?: unknown; text?: unknown };
+  return candidate.type === "text" && typeof candidate.text === "string" ? candidate.text : "";
+}
+
+function extractTextContent(value: unknown): string {
+  if (typeof value === "string") {
+    return value;
+  }
+
+  if (Array.isArray(value)) {
+    return value.map((entry) => extractTextContent(entry)).join("");
+  }
+
+  if (!value || typeof value !== "object") {
+    return "";
+  }
+
+  const record = value as {
+    text?: unknown;
+    content?: unknown;
+  };
+
+  if (typeof record.text === "string") {
+    return record.text;
+  }
+
+  return extractTextContent(record.content);
+}
+
+function extractExitPlanModePlan(value: unknown): string | undefined {
+  if (!value || typeof value !== "object") {
     return undefined;
   }
-  const message = result.errors.join(" ").trim();
-  return message.length > 0 ? message : undefined;
+
+  const record = value as {
+    plan?: unknown;
+  };
+  return typeof record.plan === "string" && record.plan.trim().length > 0
+    ? record.plan.trim()
+    : undefined;
 }
 
-function refreshResumeCursor(context: ClaudeSessionContext): void {
-  context.session = {
-    ...context.session,
-    updatedAt: new Date().toISOString(),
-    resumeCursor: {
-      ...(context.resumeSessionId ? { resume: context.resumeSessionId } : {}),
-      ...(context.resumeSessionAt ? { resumeSessionAt: context.resumeSessionAt } : {}),
-      turnCount: context.turns.length,
-    },
-  };
+function exitPlanCaptureKey(input: {
+  readonly toolUseId?: string | undefined;
+  readonly planMarkdown: string;
+}): string {
+  return input.toolUseId && input.toolUseId.length > 0
+    ? `tool:${input.toolUseId}`
+    : `plan:${input.planMarkdown}`;
+}
+
+function tryParseJsonRecord(value: string): Record<string, unknown> | undefined {
+  try {
+    const parsed = JSON.parse(value);
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed)
+      ? (parsed as Record<string, unknown>)
+      : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function toolInputFingerprint(input: Record<string, unknown>): string | undefined {
+  try {
+    return JSON.stringify(input);
+  } catch {
+    return undefined;
+  }
+}
+
+function toolResultStreamKind(itemType: CanonicalItemType): ClaudeToolResultStreamKind | undefined {
+  switch (itemType) {
+    case "command_execution":
+      return "command_output";
+    case "file_change":
+      return "file_change_output";
+    default:
+      return undefined;
+  }
+}
+
+function toolResultBlocksFromUserMessage(message: SDKMessage): Array<{
+  readonly toolUseId: string;
+  readonly block: Record<string, unknown>;
+  readonly text: string;
+  readonly isError: boolean;
+}> {
+  if (message.type !== "user") {
+    return [];
+  }
+
+  const content = (message.message as { content?: unknown } | undefined)?.content;
+  if (!Array.isArray(content)) {
+    return [];
+  }
+
+  const blocks: Array<{
+    readonly toolUseId: string;
+    readonly block: Record<string, unknown>;
+    readonly text: string;
+    readonly isError: boolean;
+  }> = [];
+
+  for (const entry of content) {
+    if (!entry || typeof entry !== "object") {
+      continue;
+    }
+
+    const block = entry as Record<string, unknown>;
+    if (block.type !== "tool_result") {
+      continue;
+    }
+
+    const toolUseId = typeof block.tool_use_id === "string" ? block.tool_use_id : undefined;
+    if (!toolUseId) {
+      continue;
+    }
+
+    blocks.push({
+      toolUseId,
+      block,
+      text: extractTextContent(block.content),
+      isError: block.is_error === true,
+    });
+  }
+
+  return blocks;
 }
 
 function requireLocalSession(
@@ -399,7 +764,7 @@ function requireLocalSession(
       threadId,
     });
   }
-  if (context.session.status === "closed") {
+  if (context.stopped || context.session.status === "closed") {
     return new ProviderAdapterSessionClosedError({
       provider: PROVIDER,
       threadId,
@@ -550,21 +915,19 @@ const buildUserMessageEffect = Effect.fn(function* (
     attachmentCount: (input.attachments ?? []).length,
   });
 
+  const promptMessage = {
+    type: "user",
+    session_id: "",
+    parent_tool_use_id: null,
+    message: {
+      role: "user",
+      content: sdkContent,
+    },
+  } as unknown as SDKUserMessage;
+
   return {
     promptSummary,
-    promptSource: {
-      async *[Symbol.asyncIterator]() {
-        yield {
-          type: "user",
-          session_id: "",
-          parent_tool_use_id: null,
-          message: {
-            role: "user",
-            content: sdkContent,
-          },
-        } as unknown as SDKUserMessage;
-      },
-    } satisfies AsyncIterable<SDKUserMessage>,
+    promptMessage,
   };
 });
 
@@ -598,12 +961,15 @@ function buildClaudeQueryOptions(input: {
     model: input.model,
     ...(input.context.session.cwd ? { cwd: input.context.session.cwd } : {}),
     ...(input.binaryPath ? { pathToClaudeCodeExecutable: input.binaryPath } : {}),
+    settingSources: [...CLAUDE_SETTING_SOURCES],
     ...(permissionMode ? { permissionMode } : {}),
     ...(permissionMode === "bypassPermissions" ? { allowDangerouslySkipPermissions: true } : {}),
     ...(input.context.resumeSessionId ? { resume: input.context.resumeSessionId } : {}),
     ...(input.context.resumeSessionAt ? { resumeSessionAt: input.context.resumeSessionAt } : {}),
     ...(input.canUseTool ? { canUseTool: input.canUseTool } : {}),
     includePartialMessages: true,
+    env: process.env,
+    ...(input.context.session.cwd ? { additionalDirectories: [input.context.session.cwd] } : {}),
     ...(normalizedModelOptions?.thinking === false
       ? { thinking: { type: "disabled" as const } }
       : {}),
@@ -635,11 +1001,30 @@ function buildClaudeQueryOptions(input: {
 }
 
 function buildCanUseTool(input: {
-  readonly context: ClaudeSessionContext;
-  readonly turnId: TurnId;
+  readonly getContext: () => ClaudeSessionContext | undefined;
   readonly runtimeEventQueue: Queue.Queue<ProviderRuntimeEvent>;
+  readonly onExitPlanMode?: (input: {
+    readonly context: ClaudeSessionContext;
+    readonly planMarkdown: string;
+    readonly toolUseId?: string | undefined;
+    readonly rawPayload?: unknown;
+  }) => void;
 }): CanUseTool {
   return async (toolName, toolInput, callbackOptions) => {
+    const context = input.getContext();
+    if (!context) {
+      return {
+        behavior: "deny",
+        message: "Claude session context is unavailable.",
+      } satisfies PermissionResult;
+    }
+    const turnId = context.turnState?.turnId;
+    const providerItemId =
+      callbackOptions &&
+      "toolUseID" in callbackOptions &&
+      typeof callbackOptions.toolUseID === "string"
+        ? callbackOptions.toolUseID
+        : undefined;
     if (isAskUserQuestionTool(toolName)) {
       const questions = parseClaudeUserInputQuestions(toolInput);
       if (questions.length === 0) {
@@ -651,7 +1036,7 @@ function buildCanUseTool(input: {
 
       const requestId = ApprovalRequestId.makeUnsafe(crypto.randomUUID());
       const answers = new Promise<ProviderUserInputAnswers>((resolve) => {
-        input.context.pendingUserInputs.set(requestId, {
+        context.pendingUserInputs.set(requestId, {
           requestId,
           questions,
           resolve,
@@ -659,38 +1044,40 @@ function buildCanUseTool(input: {
       });
 
       emitRuntimeEvent(input.runtimeEventQueue, {
-        ...providerEventBase(input.context, { turnId: input.turnId }),
+        ...providerEventBase(context, turnId ? { turnId } : undefined),
         requestId: RuntimeRequestId.makeUnsafe(requestId),
         type: "user-input.requested",
         payload: {
           questions,
         },
+        providerRefs: nativeProviderRefs(context, { providerItemId }),
       });
 
       const abortSignal = callbackOptions?.signal;
       let aborted = false;
       const onAbort = () => {
-        const pending = input.context.pendingUserInputs.get(requestId);
+        const pending = context.pendingUserInputs.get(requestId);
         if (!pending) {
           return;
         }
         aborted = true;
-        input.context.pendingUserInputs.delete(requestId);
+        context.pendingUserInputs.delete(requestId);
         pending.resolve({});
       };
       abortSignal?.addEventListener("abort", onAbort, { once: true });
 
       const resolvedAnswers = await answers;
       abortSignal?.removeEventListener("abort", onAbort);
-      input.context.pendingUserInputs.delete(requestId);
+      context.pendingUserInputs.delete(requestId);
 
       emitRuntimeEvent(input.runtimeEventQueue, {
-        ...providerEventBase(input.context, { turnId: input.turnId }),
+        ...providerEventBase(context, turnId ? { turnId } : undefined),
         requestId: RuntimeRequestId.makeUnsafe(requestId),
         type: "user-input.resolved",
         payload: {
           answers: resolvedAnswers,
         },
+        providerRefs: nativeProviderRefs(context, { providerItemId }),
       });
 
       if (aborted || abortSignal?.aborted) {
@@ -710,16 +1097,37 @@ function buildCanUseTool(input: {
       } satisfies PermissionResult;
     }
 
-    if (input.context.session.runtimeMode !== "approval-required") {
+    if (toolName === "ExitPlanMode") {
+      const planMarkdown = extractExitPlanModePlan(toolInput);
+      if (planMarkdown) {
+        input.onExitPlanMode?.({
+          context,
+          planMarkdown,
+          toolUseId: providerItemId,
+          rawPayload: {
+            toolName,
+            input: toolInput,
+          },
+        });
+      }
+
+      return {
+        behavior: "deny",
+        message:
+          "The client captured your proposed plan. Stop here and wait for the user's feedback or implementation request in a later turn.",
+      } satisfies PermissionResult;
+    }
+
+    if (context.session.runtimeMode !== "approval-required") {
       return { behavior: "allow" } satisfies PermissionResult;
     }
 
     const requestId = ApprovalRequestId.makeUnsafe(crypto.randomUUID());
-    const requestType = toolRequestType(toolName);
-    const detail = toolRequestDetail(toolName, toolInput);
+    const requestType = classifyRequestType(toolName);
+    const detail = summarizeToolRequest(toolName, toolInput);
 
     const decision = new Promise<ProviderApprovalDecision>((resolve) => {
-      input.context.pendingApprovals.set(requestId, {
+      context.pendingApprovals.set(requestId, {
         requestId,
         requestType,
         ...(detail ? { detail } : {}),
@@ -728,7 +1136,7 @@ function buildCanUseTool(input: {
     });
 
     emitRuntimeEvent(input.runtimeEventQueue, {
-      ...providerEventBase(input.context, { turnId: input.turnId }),
+      ...providerEventBase(context, turnId ? { turnId } : undefined),
       requestId: RuntimeRequestId.makeUnsafe(requestId),
       type: "request.opened",
       payload: {
@@ -737,15 +1145,17 @@ function buildCanUseTool(input: {
         args: {
           toolName,
           input: toolInput,
+          ...(providerItemId ? { toolUseId: providerItemId } : {}),
         },
       },
+      providerRefs: nativeProviderRefs(context, { providerItemId }),
     });
 
     const resolvedDecision = await decision;
-    input.context.pendingApprovals.delete(requestId);
+    context.pendingApprovals.delete(requestId);
 
     emitRuntimeEvent(input.runtimeEventQueue, {
-      ...providerEventBase(input.context, { turnId: input.turnId }),
+      ...providerEventBase(context, turnId ? { turnId } : undefined),
       requestId: RuntimeRequestId.makeUnsafe(requestId),
       type: "request.resolved",
       payload: {
@@ -755,6 +1165,7 @@ function buildCanUseTool(input: {
           toolName,
         },
       },
+      providerRefs: nativeProviderRefs(context, { providerItemId }),
     });
 
     if (resolvedDecision === "accept" || resolvedDecision === "acceptForSession") {
@@ -771,279 +1182,30 @@ function buildCanUseTool(input: {
   };
 }
 
-async function runLocalClaudeTurn(input: {
-  readonly runtime: LocalClaudeRuntime;
-  readonly context: ClaudeSessionContext;
-  readonly turn: ClaudeTurnSnapshot;
-  readonly promptSummary: string;
-  readonly promptSource: string | AsyncIterable<SDKUserMessage>;
-  readonly model: string;
-  readonly modelOptions?: ProviderSendTurnInput["modelOptions"];
-  readonly binaryPath?: string;
-  readonly interactionMode?: "default" | "plan";
-}): Promise<void> {
-  const assistantItemId = RuntimeItemId.makeUnsafe(crypto.randomUUID());
-  const canUseTool = buildCanUseTool({
-    context: input.context,
-    turnId: input.turn.id,
-    runtimeEventQueue: input.runtime.runtimeEventQueue,
-  });
-
-  const queryOptions = buildClaudeQueryOptions({
-    context: input.context,
-    model: input.model,
-    ...(input.modelOptions ? { modelOptions: input.modelOptions } : {}),
-    ...(input.binaryPath ? { binaryPath: input.binaryPath } : {}),
-    canUseTool,
-    ...(input.interactionMode ? { interactionMode: input.interactionMode } : {}),
-  });
-
-  const runtimeEvents = input.runtime.runtimeEventQueue;
-  let resultMessage: SDKResultMessage | undefined;
-  let assistantStarted = false;
-  let assistantText = "";
-
-  const turnBase = providerEventBase(input.context, { turnId: input.turn.id });
-  emitRuntimeEvent(runtimeEvents, {
-    ...turnBase,
-    type: "item.completed",
-    itemId: RuntimeItemId.makeUnsafe(crypto.randomUUID()),
-    payload: {
-      itemType: "user_message",
-      status: "completed",
-      title: "User message",
-      detail: input.promptSummary,
-      data: {
-        text: input.promptSummary,
-      },
-    },
-  });
-
-  try {
-    const currentQuery = input.runtime.createQuery({
-      prompt: input.promptSource,
-      options: queryOptions,
-    });
-    input.context.activeQuery = currentQuery;
-
-    for await (const message of currentQuery) {
-      if (typeof message.session_id === "string") {
-        input.context.resumeSessionId = message.session_id;
-      }
-
-      if (message.type === "auth_status") {
-        emitRuntimeEvent(runtimeEvents, {
-          ...providerEventBase(input.context, { turnId: input.turn.id }),
-          type: "auth.status",
-          payload: {
-            isAuthenticating: message.isAuthenticating,
-            output: message.output,
-            ...(message.error ? { error: message.error } : {}),
-          },
-        });
-        continue;
-      }
-
-      if (message.type === "tool_use_summary") {
-        emitRuntimeEvent(runtimeEvents, {
-          ...providerEventBase(input.context, { turnId: input.turn.id }),
-          type: "tool.summary",
-          payload: {
-            summary: message.summary,
-            precedingToolUseIds: message.preceding_tool_use_ids,
-          },
-        });
-        continue;
-      }
-
-      const delta = extractTextDelta(message);
-      if (delta) {
-        if (!assistantStarted) {
-          assistantStarted = true;
-          emitRuntimeEvent(runtimeEvents, {
-            ...providerEventBase(input.context, { turnId: input.turn.id }),
-            itemId: assistantItemId,
-            type: "item.started",
-            payload: {
-              itemType: delta.streamKind === "assistant_text" ? "assistant_message" : "reasoning",
-              status: "inProgress",
-              title: delta.streamKind === "assistant_text" ? "Assistant message" : "Reasoning",
-            },
-          });
-        }
-        assistantText += delta.delta;
-        emitRuntimeEvent(runtimeEvents, {
-          ...providerEventBase(input.context, { turnId: input.turn.id }),
-          itemId: assistantItemId,
-          type: "content.delta",
-          payload: {
-            streamKind: delta.streamKind,
-            delta: delta.delta,
-          },
-        });
-        continue;
-      }
-
-      if (message.type === "assistant") {
-        input.turn.items.push(message.message);
-        input.context.resumeSessionAt = message.uuid;
-        input.turn.assistantUuid = message.uuid;
-        const fullText = extractAssistantText(message);
-        if (fullText.length > assistantText.length) {
-          const remainder = fullText.slice(assistantText.length);
-          if (!assistantStarted) {
-            assistantStarted = true;
-            emitRuntimeEvent(runtimeEvents, {
-              ...providerEventBase(input.context, { turnId: input.turn.id }),
-              itemId: assistantItemId,
-              type: "item.started",
-              payload: {
-                itemType: "assistant_message",
-                status: "inProgress",
-                title: "Assistant message",
-              },
-            });
-          }
-          if (remainder.length > 0) {
-            assistantText = fullText;
-            emitRuntimeEvent(runtimeEvents, {
-              ...providerEventBase(input.context, { turnId: input.turn.id }),
-              itemId: assistantItemId,
-              type: "content.delta",
-              payload: {
-                streamKind: "assistant_text",
-                delta: remainder,
-              },
-            });
-          }
-        }
-        continue;
-      }
-
-      if (message.type === "result") {
-        resultMessage = message;
-      }
-    }
-
-    if (assistantStarted) {
-      emitRuntimeEvent(runtimeEvents, {
-        ...providerEventBase(input.context, { turnId: input.turn.id }),
-        itemId: assistantItemId,
-        type: "item.completed",
-        payload: {
-          itemType: "assistant_message",
-          status: "completed",
-          title: "Assistant message",
-          ...(assistantText ? { detail: assistantText } : {}),
-          data: {
-            text: assistantText,
-          },
-        },
-      });
-    }
-
-    input.context.session = {
-      ...input.context.session,
-      status:
-        resultMessage && resultMessage.is_error && !isInterruptedResult(resultMessage)
-          ? "error"
-          : "ready",
-      activeTurnId: undefined,
-      updatedAt: new Date().toISOString(),
-      ...(resultMessage && resultMessage.is_error && !isInterruptedResult(resultMessage)
-        ? { lastError: resultErrorMessage(resultMessage) ?? input.context.session.lastError }
-        : {}),
-    };
-    refreshResumeCursor(input.context);
-    emitRuntimeEvent(runtimeEvents, {
-      ...providerEventBase(input.context, { turnId: input.turn.id }),
-      type: "session.state.changed",
-      payload: {
-        state: "ready",
-      },
-    });
-    if (resultMessage?.usage) {
-      emitRuntimeEvent(runtimeEvents, {
-        ...providerEventBase(input.context, { turnId: input.turn.id }),
-        type: "thread.token-usage.updated",
-        payload: {
-          usage: resultMessage.usage,
-        },
-      });
-    }
-
-    emitRuntimeEvent(runtimeEvents, {
-      ...providerEventBase(input.context, { turnId: input.turn.id }),
-      type: "turn.completed",
-      payload: {
-        state:
-          !resultMessage || !resultMessage.is_error
-            ? "completed"
-            : isInterruptedResult(resultMessage)
-              ? "interrupted"
-              : "failed",
-        ...(resultMessage?.stop_reason ? { stopReason: resultMessage.stop_reason } : {}),
-        ...(resultMessage?.usage ? { usage: resultMessage.usage } : {}),
-        ...(resultMessage?.modelUsage ? { modelUsage: resultMessage.modelUsage } : {}),
-        ...(typeof resultMessage?.total_cost_usd === "number"
-          ? { totalCostUsd: resultMessage.total_cost_usd }
-          : {}),
-        ...(resultMessage && resultErrorMessage(resultMessage)
-          ? { errorMessage: resultErrorMessage(resultMessage) }
-          : {}),
-      },
-    });
-  } catch (cause) {
-    const detail = toMessage(cause, "Claude runtime failed while processing the turn.");
-    input.context.session = {
-      ...input.context.session,
-      status: "error",
-      activeTurnId: undefined,
-      updatedAt: new Date().toISOString(),
-      lastError: detail,
-    };
-    refreshResumeCursor(input.context);
-    emitRuntimeEvent(runtimeEvents, {
-      ...providerEventBase(input.context, { turnId: input.turn.id }),
-      type: "runtime.error",
-      payload: {
-        message: detail,
-        class: "provider_error",
-      },
-    });
-    emitRuntimeEvent(runtimeEvents, {
-      ...providerEventBase(input.context, { turnId: input.turn.id }),
-      type: "turn.completed",
-      payload: {
-        state: "failed",
-        errorMessage: detail,
-      },
-    });
-  } finally {
-    input.context.activeQuery = undefined;
-  }
-}
-
 const makeClaudeAdapter = (options?: ClaudeAdapterLiveOptions) =>
   Effect.gen(function* () {
     const providerToolHost = yield* ProviderToolHost;
     const fileSystem = yield* FileSystem.FileSystem;
     const serverConfig = yield* ServerConfig;
+    const nativeEventLogger =
+      options?.nativeEventLogger ??
+      (options?.nativeEventLogPath !== undefined
+        ? yield* makeEventNdjsonLogger(options.nativeEventLogPath, {
+            stream: "native",
+          })
+        : undefined);
 
     const localSessions = new Map<ThreadId, ClaudeSessionContext>();
     const remoteSessions = new Map<ThreadId, ProviderSession>();
     const remoteSessionBridgeByThreadId = new Map<ThreadId, RemoteBridgeConfig>();
     const remoteBridgeUnsubscribers = new Map<string, Array<() => void>>();
     const runtimeEventQueue = yield* Queue.unbounded<ProviderRuntimeEvent>();
-
-    const localRuntime: LocalClaudeRuntime = {
-      localSessions,
-      runtimeEventQueue,
-      providerToolHost,
-      fileSystem,
-      serverConfig,
-      createQuery: options?.createQuery ?? ((input) => query(input)),
-    };
+    const createQuery =
+      options?.createQuery ??
+      ((input: {
+        readonly prompt: AsyncIterable<SDKUserMessage>;
+        readonly options: ClaudeQueryOptions;
+      }) => query(input));
 
     const subscribeToRemoteBridge = (bridge: RemoteBridgeConfig) => {
       const key = `${bridge.baseUrl}\n${bridge.sharedSecret}`;
@@ -1109,6 +1271,784 @@ const makeClaudeAdapter = (options?: ClaudeAdapterLiveOptions) =>
             cause,
           }),
       });
+
+    const makeEventStamp = () => ({
+      eventId: EventId.makeUnsafe(crypto.randomUUID()),
+      createdAt: new Date().toISOString(),
+    });
+
+    const logNativeSdkMessage = async (context: ClaudeSessionContext, message: SDKMessage) => {
+      if (!nativeEventLogger) {
+        return;
+      }
+      await Effect.runPromise(
+        nativeEventLogger.write(
+          {
+            observedAt: new Date().toISOString(),
+            event: {
+              id:
+                "uuid" in message && typeof message.uuid === "string"
+                  ? message.uuid
+                  : crypto.randomUUID(),
+              kind: "notification",
+              provider: PROVIDER,
+              threadId: context.session.threadId,
+              createdAt: new Date().toISOString(),
+              method: `claude/${message.type}`,
+              ...(context.turnState ? { turnId: context.turnState.turnId } : {}),
+              payload: message,
+            },
+          },
+          context.session.threadId,
+        ),
+      ).catch(() => undefined);
+    };
+
+    const ensureAssistantTextBlock = (context: ClaudeSessionContext, blockIndex: number) => {
+      const turnState = context.turnState;
+      if (!turnState) {
+        return undefined;
+      }
+      const existing = turnState.assistantTextBlocks.get(blockIndex);
+      if (existing && !existing.completionEmitted) {
+        return existing;
+      }
+      const block: AssistantTextBlockState = {
+        itemId: crypto.randomUUID(),
+        blockIndex,
+        emittedTextDelta: false,
+        fallbackText: "",
+        streamClosed: false,
+        completionEmitted: false,
+      };
+      turnState.assistantTextBlocks.set(blockIndex, block);
+      turnState.assistantTextBlockOrder.push(block);
+      return block;
+    };
+
+    const completeAssistantTextBlock = (
+      context: ClaudeSessionContext,
+      block: AssistantTextBlockState,
+      _rawPayload?: unknown,
+    ) => {
+      const turnState = context.turnState;
+      if (!turnState || block.completionEmitted || !block.streamClosed) {
+        return;
+      }
+      if (!block.emittedTextDelta && block.fallbackText.length > 0) {
+        const deltaStamp = makeEventStamp();
+        emitRuntimeEvent(runtimeEventQueue, {
+          type: "content.delta",
+          eventId: deltaStamp.eventId,
+          provider: PROVIDER,
+          createdAt: deltaStamp.createdAt,
+          threadId: context.session.threadId,
+          turnId: turnState.turnId,
+          itemId: asRuntimeItemId(block.itemId),
+          payload: {
+            streamKind: "assistant_text",
+            delta: block.fallbackText,
+          },
+          providerRefs: nativeProviderRefs(context),
+        });
+      }
+
+      block.completionEmitted = true;
+      turnState.assistantTextBlocks.delete(block.blockIndex);
+      const stamp = makeEventStamp();
+      emitRuntimeEvent(runtimeEventQueue, {
+        type: "item.completed",
+        eventId: stamp.eventId,
+        provider: PROVIDER,
+        createdAt: stamp.createdAt,
+        threadId: context.session.threadId,
+        turnId: turnState.turnId,
+        itemId: asRuntimeItemId(block.itemId),
+        payload: {
+          itemType: "assistant_message",
+          status: "completed",
+          title: "Assistant message",
+          ...(block.fallbackText.length > 0 ? { detail: block.fallbackText } : {}),
+        },
+        providerRefs: nativeProviderRefs(context),
+      });
+    };
+
+    const emitRuntimeError = (context: ClaudeSessionContext, message: string, cause?: unknown) => {
+      const stamp = makeEventStamp();
+      emitRuntimeEvent(runtimeEventQueue, {
+        type: "runtime.error",
+        eventId: stamp.eventId,
+        provider: PROVIDER,
+        createdAt: stamp.createdAt,
+        threadId: context.session.threadId,
+        ...(context.turnState ? { turnId: context.turnState.turnId } : {}),
+        payload: {
+          message,
+          class: "provider_error",
+          ...(cause !== undefined ? { detail: cause } : {}),
+        },
+        providerRefs: nativeProviderRefs(context),
+      });
+    };
+
+    const emitRuntimeWarning = (
+      context: ClaudeSessionContext,
+      message: string,
+      detail?: unknown,
+    ) => {
+      const stamp = makeEventStamp();
+      emitRuntimeEvent(runtimeEventQueue, {
+        type: "runtime.warning",
+        eventId: stamp.eventId,
+        provider: PROVIDER,
+        createdAt: stamp.createdAt,
+        threadId: context.session.threadId,
+        ...(context.turnState ? { turnId: context.turnState.turnId } : {}),
+        payload: {
+          message,
+          ...(detail !== undefined ? { detail } : {}),
+        },
+        providerRefs: nativeProviderRefs(context),
+      });
+    };
+
+    const emitProposedPlanCompleted = (
+      context: ClaudeSessionContext,
+      planMarkdown: string,
+      toolUseId?: string,
+      _rawPayload?: unknown,
+    ) => {
+      const turnState = context.turnState;
+      const trimmed = planMarkdown.trim();
+      if (!turnState || trimmed.length === 0) {
+        return;
+      }
+      const captureKey = exitPlanCaptureKey({ toolUseId, planMarkdown: trimmed });
+      if (turnState.capturedProposedPlanKeys.has(captureKey)) {
+        return;
+      }
+      turnState.capturedProposedPlanKeys.add(captureKey);
+      const stamp = makeEventStamp();
+      emitRuntimeEvent(runtimeEventQueue, {
+        type: "turn.proposed.completed",
+        eventId: stamp.eventId,
+        provider: PROVIDER,
+        createdAt: stamp.createdAt,
+        threadId: context.session.threadId,
+        turnId: turnState.turnId,
+        payload: {
+          planMarkdown: trimmed,
+        },
+        providerRefs: nativeProviderRefs(context, { providerItemId: toolUseId }),
+      });
+    };
+
+    const completeTurn = (
+      context: ClaudeSessionContext,
+      status: ProviderRuntimeTurnStatus,
+      errorMessage?: string,
+      result?: SDKResultMessage,
+    ) => {
+      const turnState = context.turnState;
+      const usageSnapshot = normalizeClaudeTokenUsage(
+        result?.usage,
+        maxClaudeContextWindowFromModelUsage(result?.modelUsage),
+      );
+
+      if (turnState) {
+        for (const block of turnState.assistantTextBlockOrder) {
+          block.streamClosed = true;
+          completeAssistantTextBlock(context, block, result);
+        }
+        context.turns.push({
+          id: turnState.turnId,
+          items: [...turnState.items],
+          ...(turnState.assistantUuid ? { assistantUuid: turnState.assistantUuid } : {}),
+        });
+      }
+
+      if (usageSnapshot) {
+        const usageStamp = makeEventStamp();
+        emitRuntimeEvent(runtimeEventQueue, {
+          type: "thread.token-usage.updated",
+          eventId: usageStamp.eventId,
+          provider: PROVIDER,
+          createdAt: usageStamp.createdAt,
+          threadId: context.session.threadId,
+          ...(turnState ? { turnId: turnState.turnId } : {}),
+          payload: {
+            usage: usageSnapshot,
+          },
+          providerRefs: nativeProviderRefs(context),
+        });
+      }
+
+      const stamp = makeEventStamp();
+      emitRuntimeEvent(runtimeEventQueue, {
+        type: "turn.completed",
+        eventId: stamp.eventId,
+        provider: PROVIDER,
+        createdAt: stamp.createdAt,
+        threadId: context.session.threadId,
+        ...(turnState ? { turnId: turnState.turnId } : {}),
+        payload: {
+          state: status,
+          ...(result?.stop_reason !== undefined ? { stopReason: result.stop_reason } : {}),
+          ...(result?.usage ? { usage: result.usage } : {}),
+          ...(result?.modelUsage ? { modelUsage: result.modelUsage } : {}),
+          ...(typeof result?.total_cost_usd === "number"
+            ? { totalCostUsd: result.total_cost_usd }
+            : {}),
+          ...(errorMessage ? { errorMessage } : {}),
+        },
+        providerRefs: nativeProviderRefs(context),
+      });
+
+      context.turnState = undefined;
+      context.session = {
+        ...context.session,
+        status: "ready",
+        activeTurnId: undefined,
+        updatedAt: new Date().toISOString(),
+        ...(status === "failed" && errorMessage ? { lastError: errorMessage } : {}),
+      };
+      updateResumeCursor(context);
+    };
+
+    const stopLocalSessionContext = async (
+      context: ClaudeSessionContext,
+      options?: { readonly emitExitEvent?: boolean },
+    ) => {
+      if (context.stopped) {
+        return;
+      }
+      context.stopped = true;
+      for (const pending of context.pendingApprovals.values()) {
+        pending.resolve("cancel");
+      }
+      context.pendingApprovals.clear();
+      for (const pending of context.pendingUserInputs.values()) {
+        pending.resolve({});
+      }
+      context.pendingUserInputs.clear();
+      if (context.turnState) {
+        completeTurn(context, "interrupted", "Session stopped.");
+      }
+      try {
+        context.query.close();
+      } catch (error) {
+        emitRuntimeError(context, "Failed to close Claude runtime query.", error);
+      }
+      await Effect.runPromise(Queue.shutdown(context.promptQueue)).catch(() => undefined);
+      await Effect.runPromise(providerToolHost.closeSession(context.session.threadId)).catch(
+        () => undefined,
+      );
+      context.session = {
+        ...context.session,
+        status: "closed",
+        activeTurnId: undefined,
+        updatedAt: new Date().toISOString(),
+      };
+      if (options?.emitExitEvent !== false) {
+        const stamp = makeEventStamp();
+        emitRuntimeEvent(runtimeEventQueue, {
+          type: "session.exited",
+          eventId: stamp.eventId,
+          provider: PROVIDER,
+          createdAt: stamp.createdAt,
+          threadId: context.session.threadId,
+          payload: {
+            reason: "Session stopped",
+            exitKind: "graceful",
+          },
+          providerRefs: {},
+        });
+      }
+      localSessions.delete(context.session.threadId);
+    };
+
+    const handleSdkMessage = async (context: ClaudeSessionContext, message: SDKMessage) => {
+      if (typeof message.session_id === "string" && message.session_id.length > 0) {
+        context.resumeSessionId = message.session_id;
+        if (context.lastThreadStartedId !== message.session_id) {
+          context.lastThreadStartedId = message.session_id;
+          const threadStamp = makeEventStamp();
+          emitRuntimeEvent(runtimeEventQueue, {
+            type: "thread.started",
+            eventId: threadStamp.eventId,
+            provider: PROVIDER,
+            createdAt: threadStamp.createdAt,
+            threadId: context.session.threadId,
+            payload: {
+              providerThreadId: message.session_id,
+            },
+            providerRefs: {},
+          });
+        }
+      }
+      await logNativeSdkMessage(context, message);
+
+      if (message.type === "tool_progress") {
+        const stamp = makeEventStamp();
+        emitRuntimeEvent(runtimeEventQueue, {
+          type: "tool.progress",
+          eventId: stamp.eventId,
+          provider: PROVIDER,
+          createdAt: stamp.createdAt,
+          threadId: context.session.threadId,
+          ...(context.turnState ? { turnId: context.turnState.turnId } : {}),
+          payload: {
+            toolUseId: message.tool_use_id,
+            toolName: message.tool_name,
+            elapsedSeconds: message.elapsed_time_seconds,
+            ...(message.task_id ? { summary: `task:${message.task_id}` } : {}),
+          },
+          providerRefs: nativeProviderRefs(context),
+        });
+        return;
+      }
+
+      if (message.type === "tool_use_summary") {
+        const stamp = makeEventStamp();
+        emitRuntimeEvent(runtimeEventQueue, {
+          type: "tool.summary",
+          eventId: stamp.eventId,
+          provider: PROVIDER,
+          createdAt: stamp.createdAt,
+          threadId: context.session.threadId,
+          ...(context.turnState ? { turnId: context.turnState.turnId } : {}),
+          payload: {
+            summary: message.summary,
+            ...(message.preceding_tool_use_ids.length > 0
+              ? { precedingToolUseIds: message.preceding_tool_use_ids }
+              : {}),
+          },
+          providerRefs: nativeProviderRefs(context),
+        });
+        return;
+      }
+
+      if (message.type === "auth_status") {
+        const stamp = makeEventStamp();
+        emitRuntimeEvent(runtimeEventQueue, {
+          type: "auth.status",
+          eventId: stamp.eventId,
+          provider: PROVIDER,
+          createdAt: stamp.createdAt,
+          threadId: context.session.threadId,
+          ...(context.turnState ? { turnId: context.turnState.turnId } : {}),
+          payload: {
+            isAuthenticating: message.isAuthenticating,
+            output: message.output,
+            ...(message.error ? { error: message.error } : {}),
+          },
+          providerRefs: nativeProviderRefs(context),
+        });
+        return;
+      }
+
+      if (message.type === "rate_limit_event") {
+        const stamp = makeEventStamp();
+        emitRuntimeEvent(runtimeEventQueue, {
+          type: "account.rate-limits.updated",
+          eventId: stamp.eventId,
+          provider: PROVIDER,
+          createdAt: stamp.createdAt,
+          threadId: context.session.threadId,
+          ...(context.turnState ? { turnId: context.turnState.turnId } : {}),
+          payload: {
+            rateLimits: message,
+          },
+          providerRefs: nativeProviderRefs(context),
+        });
+        return;
+      }
+
+      if (message.type === "stream_event") {
+        const event = message.event as unknown as Record<string, unknown>;
+        if (
+          event.type === "content_block_delta" &&
+          context.turnState &&
+          typeof event.delta === "object" &&
+          event.delta !== null
+        ) {
+          const delta = event.delta as Record<string, unknown>;
+          const deltaType = typeof delta.type === "string" ? delta.type : undefined;
+          if (
+            (deltaType === "text_delta" || deltaType === "thinking_delta") &&
+            typeof event.index === "number"
+          ) {
+            const block =
+              deltaType === "text_delta"
+                ? ensureAssistantTextBlock(context, event.index)
+                : context.turnState.assistantTextBlocks.get(event.index);
+            const deltaText =
+              deltaType === "text_delta"
+                ? typeof delta.text === "string"
+                  ? delta.text
+                  : ""
+                : typeof delta.thinking === "string"
+                  ? delta.thinking
+                  : "";
+            if (block && deltaType === "text_delta") {
+              block.emittedTextDelta = true;
+            }
+            if (deltaText.length > 0) {
+              const stamp = makeEventStamp();
+              emitRuntimeEvent(runtimeEventQueue, {
+                type: "content.delta",
+                eventId: stamp.eventId,
+                provider: PROVIDER,
+                createdAt: stamp.createdAt,
+                threadId: context.session.threadId,
+                turnId: context.turnState.turnId,
+                ...(block ? { itemId: asRuntimeItemId(block.itemId) } : {}),
+                payload: {
+                  streamKind: streamKindFromDeltaType(deltaType),
+                  delta: deltaText,
+                },
+                providerRefs: nativeProviderRefs(context),
+              });
+            }
+            return;
+          }
+
+          if (deltaType === "input_json_delta" && typeof event.index === "number") {
+            const tool = context.inFlightTools.get(event.index);
+            if (!tool || typeof delta.partial_json !== "string") {
+              return;
+            }
+            const partialInputJson = tool.partialInputJson + delta.partial_json;
+            const parsedInput = tryParseJsonRecord(partialInputJson);
+            const detail = parsedInput
+              ? summarizeToolRequest(tool.toolName, parsedInput)
+              : tool.detail;
+            const nextFingerprint =
+              parsedInput && Object.keys(parsedInput).length > 0
+                ? toolInputFingerprint(parsedInput)
+                : undefined;
+            const nextTool: ToolInFlight = {
+              ...tool,
+              partialInputJson,
+              ...(parsedInput ? { input: parsedInput } : {}),
+              ...(detail ? { detail } : {}),
+              ...(nextFingerprint !== undefined
+                ? { lastEmittedInputFingerprint: nextFingerprint }
+                : {}),
+            };
+            context.inFlightTools.set(event.index, nextTool);
+            if (
+              parsedInput &&
+              nextFingerprint &&
+              tool.lastEmittedInputFingerprint !== nextFingerprint
+            ) {
+              const stamp = makeEventStamp();
+              emitRuntimeEvent(runtimeEventQueue, {
+                type: "item.updated",
+                eventId: stamp.eventId,
+                provider: PROVIDER,
+                createdAt: stamp.createdAt,
+                threadId: context.session.threadId,
+                ...(context.turnState ? { turnId: context.turnState.turnId } : {}),
+                itemId: asRuntimeItemId(nextTool.itemId),
+                payload: {
+                  itemType: nextTool.itemType,
+                  status: "inProgress",
+                  title: nextTool.title,
+                  ...(nextTool.detail ? { detail: nextTool.detail } : {}),
+                  data: {
+                    toolName: nextTool.toolName,
+                    input: nextTool.input,
+                  },
+                },
+                providerRefs: nativeProviderRefs(context, { providerItemId: nextTool.itemId }),
+              });
+            }
+            return;
+          }
+        }
+
+        if (event.type === "content_block_start" && typeof event.index === "number") {
+          const block = (event.content_block ?? {}) as Record<string, unknown>;
+          if (block.type === "text") {
+            const assistantBlock = ensureAssistantTextBlock(context, event.index);
+            if (assistantBlock) {
+              assistantBlock.fallbackText = extractContentBlockText(block);
+            }
+            return;
+          }
+
+          const toolType = typeof block.type === "string" ? block.type : "";
+          if (!["tool_use", "server_tool_use", "mcp_tool_use"].includes(toolType)) {
+            return;
+          }
+
+          const toolName = typeof block.name === "string" ? block.name : "Tool";
+          const itemType = classifyToolItemType(toolName);
+          const toolInput =
+            typeof block.input === "object" && block.input !== null
+              ? (block.input as Record<string, unknown>)
+              : {};
+          const itemId = typeof block.id === "string" ? block.id : crypto.randomUUID();
+          const tool: ToolInFlight = {
+            itemId,
+            itemType,
+            toolName,
+            title: titleForTool(itemType),
+            detail: summarizeToolRequest(toolName, toolInput),
+            input: toolInput,
+            partialInputJson: "",
+            ...(() => {
+              const fingerprint =
+                Object.keys(toolInput).length > 0 ? toolInputFingerprint(toolInput) : undefined;
+              return fingerprint !== undefined ? { lastEmittedInputFingerprint: fingerprint } : {};
+            })(),
+          };
+          context.inFlightTools.set(event.index, tool);
+          const stamp = makeEventStamp();
+          emitRuntimeEvent(runtimeEventQueue, {
+            type: "item.started",
+            eventId: stamp.eventId,
+            provider: PROVIDER,
+            createdAt: stamp.createdAt,
+            threadId: context.session.threadId,
+            ...(context.turnState ? { turnId: context.turnState.turnId } : {}),
+            itemId: asRuntimeItemId(tool.itemId),
+            payload: {
+              itemType: tool.itemType,
+              status: "inProgress",
+              title: tool.title,
+              ...(tool.detail ? { detail: tool.detail } : {}),
+              data: {
+                toolName: tool.toolName,
+                input: tool.input,
+              },
+            },
+            providerRefs: nativeProviderRefs(context, { providerItemId: tool.itemId }),
+          });
+          return;
+        }
+
+        if (event.type === "content_block_stop" && typeof event.index === "number") {
+          const assistantBlock = context.turnState?.assistantTextBlocks.get(event.index);
+          if (assistantBlock) {
+            assistantBlock.streamClosed = true;
+            completeAssistantTextBlock(context, assistantBlock, message);
+            return;
+          }
+        }
+
+        return;
+      }
+
+      if (message.type === "user") {
+        if (context.turnState) {
+          context.turnState.items.push(message.message);
+        }
+        for (const toolResult of toolResultBlocksFromUserMessage(message)) {
+          const toolEntry = Array.from(context.inFlightTools.entries()).find(
+            ([, tool]) => tool.itemId === toolResult.toolUseId,
+          );
+          if (!toolEntry) {
+            continue;
+          }
+          const [index, tool] = toolEntry;
+          const streamKind = toolResultStreamKind(tool.itemType);
+          if (streamKind && toolResult.text.length > 0 && context.turnState) {
+            const deltaStamp = makeEventStamp();
+            emitRuntimeEvent(runtimeEventQueue, {
+              type: "content.delta",
+              eventId: deltaStamp.eventId,
+              provider: PROVIDER,
+              createdAt: deltaStamp.createdAt,
+              threadId: context.session.threadId,
+              turnId: context.turnState.turnId,
+              itemId: asRuntimeItemId(tool.itemId),
+              payload: {
+                streamKind,
+                delta: toolResult.text,
+              },
+              providerRefs: nativeProviderRefs(context, { providerItemId: tool.itemId }),
+            });
+          }
+          const completedStamp = makeEventStamp();
+          emitRuntimeEvent(runtimeEventQueue, {
+            type: "item.completed",
+            eventId: completedStamp.eventId,
+            provider: PROVIDER,
+            createdAt: completedStamp.createdAt,
+            threadId: context.session.threadId,
+            ...(context.turnState ? { turnId: context.turnState.turnId } : {}),
+            itemId: asRuntimeItemId(tool.itemId),
+            payload: {
+              itemType: tool.itemType,
+              status: toolResult.isError ? "failed" : "completed",
+              title: tool.title,
+              ...(tool.detail ? { detail: tool.detail } : {}),
+              data: {
+                toolName: tool.toolName,
+                input: tool.input,
+                result: toolResult.block,
+              },
+            },
+            providerRefs: nativeProviderRefs(context, { providerItemId: tool.itemId }),
+          });
+          context.inFlightTools.delete(index);
+        }
+        return;
+      }
+
+      if (message.type === "assistant") {
+        if (!context.turnState) {
+          const syntheticTurnId = TurnId.makeUnsafe(crypto.randomUUID());
+          context.turnState = {
+            turnId: syntheticTurnId,
+            startedAt: new Date().toISOString(),
+            items: [],
+            assistantTextBlocks: new Map(),
+            assistantTextBlockOrder: [],
+            capturedProposedPlanKeys: new Set(),
+            nextSyntheticAssistantBlockIndex: -1,
+          };
+          context.session = {
+            ...context.session,
+            status: "running",
+            activeTurnId: syntheticTurnId,
+            updatedAt: new Date().toISOString(),
+          };
+          const turnStartedStamp = makeEventStamp();
+          emitRuntimeEvent(runtimeEventQueue, {
+            type: "turn.started",
+            eventId: turnStartedStamp.eventId,
+            provider: PROVIDER,
+            createdAt: turnStartedStamp.createdAt,
+            threadId: context.session.threadId,
+            turnId: syntheticTurnId,
+            payload: {},
+            providerRefs: nativeProviderRefs(context),
+          });
+        }
+        if (context.turnState) {
+          context.turnState.items.push(message.message);
+          const snapshotTextBlocks = extractAssistantTextBlocks(message);
+          for (const [index, text] of snapshotTextBlocks.entries()) {
+            const block = ensureAssistantTextBlock(context, index);
+            if (!block) {
+              continue;
+            }
+            if (block.fallbackText.length === 0) {
+              block.fallbackText = text;
+            }
+          }
+        }
+        const content = (message.message as { content?: unknown } | undefined)?.content;
+        if (Array.isArray(content)) {
+          for (const block of content) {
+            if (!block || typeof block !== "object") {
+              continue;
+            }
+            const toolUse = block as {
+              type?: unknown;
+              id?: unknown;
+              name?: unknown;
+              input?: unknown;
+            };
+            if (toolUse.type !== "tool_use" || toolUse.name !== "ExitPlanMode") {
+              continue;
+            }
+            const planMarkdown = extractExitPlanModePlan(toolUse.input);
+            if (planMarkdown) {
+              emitProposedPlanCompleted(
+                context,
+                planMarkdown,
+                typeof toolUse.id === "string" ? toolUse.id : undefined,
+                message,
+              );
+            }
+          }
+        }
+        if ("uuid" in message && typeof message.uuid === "string") {
+          context.lastAssistantUuid = message.uuid;
+          if (context.turnState) {
+            context.turnState.assistantUuid = message.uuid;
+          }
+        }
+        updateResumeCursor(context);
+        return;
+      }
+
+      if (message.type === "system") {
+        emitRuntimeWarning(
+          context,
+          `Unhandled Claude system message subtype '${message.subtype}'.`,
+          message,
+        );
+        return;
+      }
+
+      if (message.type === "result") {
+        const status = !message.is_error
+          ? "completed"
+          : isInterruptedResult(message)
+            ? "interrupted"
+            : "failed";
+        const errorMessage = resultErrorMessage(message);
+        if (status === "failed") {
+          emitRuntimeError(context, errorMessage ?? "Claude turn failed.");
+        }
+        completeTurn(context, status, errorMessage, message);
+        return;
+      }
+
+      emitRuntimeWarning(context, `Unhandled Claude SDK message type '${message.type}'.`, message);
+    };
+
+    const startLocalSessionLoop = (context: ClaudeSessionContext) => {
+      return Effect.runFork(
+        Effect.promise(async () => {
+          for await (const message of context.query) {
+            if (context.stopped) {
+              break;
+            }
+            await handleSdkMessage(context, message);
+          }
+        }).pipe(
+          Effect.catchCause((cause) =>
+            Effect.sync(() => {
+              if (context.stopped) {
+                return;
+              }
+              const message = messageFromClaudeStreamCause(cause, "Claude runtime stream failed.");
+              emitRuntimeError(context, message);
+              if (context.turnState) {
+                completeTurn(
+                  context,
+                  isClaudeInterruptedCause(cause) ? "interrupted" : "failed",
+                  isClaudeInterruptedCause(cause)
+                    ? interruptionMessageFromClaudeCause(cause)
+                    : message,
+                );
+              }
+            }),
+          ),
+          Effect.tap(() =>
+            Effect.sync(() => {
+              if (!context.stopped && context.turnState) {
+                completeTurn(context, "interrupted", "Claude runtime stream ended.");
+              }
+            }),
+          ),
+          Effect.ensuring(
+            Effect.promise(() =>
+              stopLocalSessionContext(context, {
+                emitExitEvent: !context.stopped,
+              }),
+            ),
+          ),
+        ),
+      );
+    };
 
     const startSession: ClaudeAdapterShape["startSession"] = (input) => {
       if (input.provider !== undefined && input.provider !== PROVIDER) {
@@ -1214,6 +2154,15 @@ const makeClaudeAdapter = (options?: ClaudeAdapterLiveOptions) =>
             : undefined;
 
         const now = new Date().toISOString();
+        const promptQueue = yield* Queue.unbounded<PromptQueueItem>();
+        let contextRef: ClaudeSessionContext | undefined;
+        const canUseTool = buildCanUseTool({
+          getContext: () => contextRef,
+          runtimeEventQueue,
+          onExitPlanMode: ({ context, planMarkdown, toolUseId, rawPayload }) => {
+            emitProposedPlanCompleted(context, planMarkdown, toolUseId, rawPayload);
+          },
+        });
         const session: ProviderSession = {
           provider: PROVIDER,
           status: "ready",
@@ -1226,18 +2175,78 @@ const makeClaudeAdapter = (options?: ClaudeAdapterLiveOptions) =>
           ...(input.resumeCursor !== undefined ? { resumeCursor: input.resumeCursor } : {}),
         };
 
+        const prompt = Stream.fromQueue(promptQueue).pipe(
+          Stream.filter(
+            (item): item is Extract<PromptQueueItem, { type: "message" }> =>
+              item.type === "message",
+          ),
+          Stream.map((item) => item.message),
+          Stream.toAsyncIterable,
+        );
+
+        const basePermissionMode =
+          workspaceProxy || input.runtimeMode !== "full-access"
+            ? ("default" as PermissionMode)
+            : ("bypassPermissions" as PermissionMode);
+        const queryOptions = buildClaudeQueryOptions({
+          context: {
+            session,
+            promptQueue,
+            query: undefined as never,
+            streamFiber: undefined,
+            startedAt: now,
+            basePermissionMode,
+            currentModel: session.model,
+            turns: [],
+            pendingApprovals: new Map(),
+            pendingUserInputs: new Map(),
+            inFlightTools: new Map(),
+            turnState: undefined,
+            lastKnownContextWindow: undefined,
+            lastKnownTokenUsage: undefined,
+            lastAssistantUuid: undefined,
+            lastThreadStartedId: undefined,
+            resumeSessionId: resumeState.resume,
+            resumeSessionAt: resumeState.resumeSessionAt,
+            workspaceProxy,
+            binaryPath,
+            stopped: false,
+          },
+          model: session.model ?? DEFAULT_MODEL,
+          ...(input.modelOptions ? { modelOptions: input.modelOptions } : {}),
+          ...(binaryPath ? { binaryPath } : {}),
+          canUseTool,
+        });
+        const queryRuntime = createQuery({
+          prompt,
+          options: queryOptions,
+        });
+
         const context: ClaudeSessionContext = {
           session,
+          promptQueue,
+          query: queryRuntime,
+          streamFiber: undefined,
+          startedAt: now,
+          basePermissionMode,
+          currentModel: session.model,
           turns: [],
           pendingApprovals: new Map(),
           pendingUserInputs: new Map(),
+          inFlightTools: new Map(),
+          turnState: undefined,
+          lastKnownContextWindow: undefined,
+          lastKnownTokenUsage: undefined,
+          lastAssistantUuid: resumeState.resumeSessionAt,
+          lastThreadStartedId: undefined,
           resumeSessionId: resumeState.resume,
           resumeSessionAt: resumeState.resumeSessionAt,
-          activeQuery: undefined,
           workspaceProxy,
           binaryPath,
+          stopped: false,
         };
-        refreshResumeCursor(context);
+        contextRef = context;
+        updateResumeCursor(context);
         localSessions.set(input.threadId, context);
 
         emitRuntimeEvent(runtimeEventQueue, {
@@ -1253,6 +2262,7 @@ const makeClaudeAdapter = (options?: ClaudeAdapterLiveOptions) =>
               model: session.model,
               cwd: session.cwd,
               executionMode: "local",
+              ...(basePermissionMode ? { permissionMode: basePermissionMode } : {}),
               ...(workspaceProxy ? { workspaceProxyMode: workspaceProxy.mode } : {}),
             },
           },
@@ -1264,6 +2274,8 @@ const makeClaudeAdapter = (options?: ClaudeAdapterLiveOptions) =>
             state: "ready",
           },
         });
+
+        context.streamFiber = startLocalSessionLoop(context);
 
         return context.session;
       });
@@ -1290,32 +2302,70 @@ const makeClaudeAdapter = (options?: ClaudeAdapterLiveOptions) =>
         }
 
         const context = yield* requireLocalSessionEffect(localSessions, input.threadId);
-        if (context.activeQuery) {
-          return yield* new ProviderAdapterRequestError({
-            provider: PROVIDER,
-            method: "turn/start",
-            detail: "Claude is already processing a turn for this thread.",
-          });
-        }
 
         const builtUserMessage = yield* buildUserMessageEffect(input, {
-          fileSystem: localRuntime.fileSystem,
-          stateDir: localRuntime.serverConfig.stateDir,
+          fileSystem,
+          stateDir: serverConfig.stateDir,
         });
 
         const turnId = TurnId.makeUnsafe(crypto.randomUUID());
-        const turn: ClaudeTurnSnapshot = {
-          id: turnId,
-          items: [{ type: "user", text: builtUserMessage.promptSummary }],
+        const nextModel = normalizedClaudeModel(
+          input.model ?? context.currentModel ?? context.session.model,
+        );
+        if (nextModel !== context.currentModel) {
+          yield* Effect.tryPromise({
+            try: () => context.query.setModel(nextModel),
+            catch: (cause) =>
+              new ProviderAdapterRequestError({
+                provider: PROVIDER,
+                method: "turn/setModel",
+                detail: toMessage(cause, "Failed to update Claude model."),
+                cause,
+              }),
+          });
+          context.currentModel = nextModel;
+        }
+        context.turnState = {
+          turnId,
+          startedAt: new Date().toISOString(),
+          items: [],
+          assistantTextBlocks: new Map(),
+          assistantTextBlockOrder: [],
+          capturedProposedPlanKeys: new Set(),
+          nextSyntheticAssistantBlockIndex: -1,
         };
-        context.turns.push(turn);
         context.session = {
           ...context.session,
           status: "running",
           activeTurnId: turnId,
           updatedAt: new Date().toISOString(),
-          model: normalizedClaudeModel(input.model ?? context.session.model),
+          model: nextModel,
         };
+        context.currentModel = nextModel;
+
+        if (input.interactionMode === "plan") {
+          yield* Effect.tryPromise({
+            try: () => context.query.setPermissionMode("plan" as PermissionMode),
+            catch: (cause) =>
+              new ProviderAdapterRequestError({
+                provider: PROVIDER,
+                method: "turn/setPermissionMode",
+                detail: toMessage(cause, "Failed to enter Claude plan mode."),
+                cause,
+              }),
+          });
+        } else if (input.interactionMode === "default" && context.basePermissionMode) {
+          yield* Effect.tryPromise({
+            try: () => context.query.setPermissionMode(context.basePermissionMode!),
+            catch: (cause) =>
+              new ProviderAdapterRequestError({
+                provider: PROVIDER,
+                method: "turn/setPermissionMode",
+                detail: toMessage(cause, "Failed to restore Claude permission mode."),
+                cause,
+              }),
+          });
+        }
 
         emitRuntimeEvent(runtimeEventQueue, {
           ...providerEventBase(context, { turnId }),
@@ -1332,19 +2382,10 @@ const makeClaudeAdapter = (options?: ClaudeAdapterLiveOptions) =>
           },
         });
 
-        const model = normalizedClaudeModel(input.model ?? context.session.model);
-
-        void runLocalClaudeTurn({
-          runtime: localRuntime,
-          context,
-          turn,
-          promptSummary: builtUserMessage.promptSummary,
-          promptSource: builtUserMessage.promptSource,
-          model,
-          ...(input.modelOptions ? { modelOptions: input.modelOptions } : {}),
-          ...(context.binaryPath ? { binaryPath: context.binaryPath } : {}),
-          ...(input.interactionMode ? { interactionMode: input.interactionMode } : {}),
-        });
+        yield* Queue.offer(context.promptQueue, {
+          type: "message",
+          message: builtUserMessage.promptMessage,
+        }).pipe(Effect.asVoid);
 
         return {
           threadId: input.threadId,
@@ -1370,11 +2411,8 @@ const makeClaudeAdapter = (options?: ClaudeAdapterLiveOptions) =>
         }
 
         const context = yield* requireLocalSessionEffect(localSessions, threadId);
-        if (!context.activeQuery) {
-          return;
-        }
         yield* Effect.tryPromise({
-          try: () => context.activeQuery!.interrupt(),
+          try: () => context.query.interrupt(),
           catch: (cause) =>
             new ProviderAdapterRequestError({
               provider: PROVIDER,
@@ -1468,36 +2506,11 @@ const makeClaudeAdapter = (options?: ClaudeAdapterLiveOptions) =>
         if (!context) {
           return;
         }
-        if (context.activeQuery) {
-          context.activeQuery.close();
-          context.activeQuery = undefined;
-        }
-        yield* providerToolHost.closeSession(threadId);
-        for (const pending of context.pendingApprovals.values()) {
-          pending.resolve("cancel");
-        }
-        context.pendingApprovals.clear();
-        for (const pending of context.pendingUserInputs.values()) {
-          pending.resolve({});
-        }
-        context.pendingUserInputs.clear();
-        context.session = {
-          ...context.session,
-          status: "closed",
-          activeTurnId: undefined,
-          updatedAt: new Date().toISOString(),
-        };
-        emitRuntimeEvent(runtimeEventQueue, {
-          ...providerEventBase(context),
-          type: "session.exited",
-          payload: {
-            exitKind: "graceful",
-            reason: "Session stopped",
-          },
-        });
-        yield* Effect.sync(() => {
-          localSessions.delete(threadId);
-        });
+        yield* Effect.promise(() =>
+          stopLocalSessionContext(context, {
+            emitExitEvent: true,
+          }),
+        );
       });
 
     const readThread: ClaudeAdapterShape["readThread"] = (threadId) =>
@@ -1566,7 +2579,8 @@ const makeClaudeAdapter = (options?: ClaudeAdapterLiveOptions) =>
         const nextLength = Math.max(0, context.turns.length - numTurns);
         context.turns.splice(nextLength);
         context.resumeSessionAt = context.turns[context.turns.length - 1]?.assistantUuid;
-        refreshResumeCursor(context);
+        context.lastAssistantUuid = context.resumeSessionAt;
+        updateResumeCursor(context);
         return {
           threadId,
           turns: context.turns.map((turn) => ({

@@ -30,44 +30,109 @@ function asThreadId(value: string): ThreadId {
   return ThreadId.makeUnsafe(value);
 }
 
-function makeFakeQuery(messages: ReadonlyArray<SDKMessage>): ClaudeQuery {
-  const iterator = (async function* () {
-    for (const message of messages) {
-      yield message;
-    }
-  })();
+class FakeClaudeQuery implements AsyncIterable<SDKMessage> {
+  private readonly queue: Array<SDKMessage> = [];
+  private readonly waiters: Array<{
+    readonly resolve: (value: IteratorResult<SDKMessage>) => void;
+    readonly reject: (reason: unknown) => void;
+  }> = [];
+  private done = false;
+  private failure: unknown | undefined;
 
-  return Object.assign(iterator, {
-    interrupt: async () => undefined,
-    setModel: async () => undefined,
-    setPermissionMode: async () => undefined,
-    setMaxThinkingTokens: async () => undefined,
-    applyFlagSettings: async () => undefined,
-    getSettings: async () => ({}),
-    rewindFiles: async () => ({ canRewind: false }),
-    cancelAsyncMessage: async () => false,
-    seedReadState: async () => undefined,
-    enableRemoteControl: async () => false,
-    setProactive: async () => undefined,
-    generateSessionTitle: async () => "",
-    askSideQuestion: async () => "",
-    initializationResult: Promise.resolve({}),
-    supportedCommands: [],
-    supportedModels: [],
-    close: () => undefined,
-  }) as unknown as ClaudeQuery;
+  emit(message: SDKMessage): void {
+    if (this.done) {
+      return;
+    }
+    const waiter = this.waiters.shift();
+    if (waiter) {
+      waiter.resolve({ done: false, value: message });
+      return;
+    }
+    this.queue.push(message);
+  }
+
+  finish(): void {
+    if (this.done) {
+      return;
+    }
+    this.done = true;
+    for (const waiter of this.waiters.splice(0)) {
+      waiter.resolve({ done: true, value: undefined });
+    }
+  }
+
+  fail(cause: unknown): void {
+    if (this.done) {
+      return;
+    }
+    this.done = true;
+    this.failure = cause;
+    for (const waiter of this.waiters.splice(0)) {
+      waiter.reject(cause);
+    }
+  }
+
+  readonly interrupt = async (): Promise<void> => undefined;
+  readonly setModel = async (): Promise<void> => undefined;
+  readonly setPermissionMode = async (): Promise<void> => undefined;
+  readonly setMaxThinkingTokens = async (): Promise<void> => undefined;
+  readonly applyFlagSettings = async (): Promise<void> => undefined;
+  readonly getSettings = async (): Promise<Record<string, unknown>> => ({});
+  readonly rewindFiles = async (): Promise<{ canRewind: false }> => ({ canRewind: false });
+  readonly cancelAsyncMessage = async (): Promise<boolean> => false;
+  readonly seedReadState = async (): Promise<void> => undefined;
+  readonly enableRemoteControl = async (): Promise<boolean> => false;
+  readonly setProactive = async (): Promise<void> => undefined;
+  readonly generateSessionTitle = async (): Promise<string> => "";
+  readonly askSideQuestion = async (): Promise<string> => "";
+  readonly initializationResult = Promise.resolve({});
+  readonly supportedCommands: string[] = [];
+  readonly supportedModels: string[] = [];
+  readonly close = (): void => {
+    this.finish();
+  };
+
+  [Symbol.asyncIterator](): AsyncIterator<SDKMessage> {
+    return {
+      next: () => {
+        if (this.queue.length > 0) {
+          const value = this.queue.shift();
+          if (value) {
+            return Promise.resolve({
+              done: false,
+              value,
+            });
+          }
+        }
+        if (this.failure !== undefined) {
+          const failure = this.failure;
+          this.failure = undefined;
+          return Promise.reject(failure);
+        }
+        if (this.done) {
+          return Promise.resolve({
+            done: true,
+            value: undefined,
+          });
+        }
+        return new Promise((resolve, reject) => {
+          this.waiters.push({
+            resolve,
+            reject,
+          });
+        });
+      },
+    };
+  }
 }
 
 async function collectPromptMessages(
-  prompt: string | AsyncIterable<SDKUserMessage>,
+  prompt: AsyncIterable<SDKUserMessage>,
 ): Promise<ReadonlyArray<SDKUserMessage>> {
-  if (typeof prompt === "string") {
-    return [];
-  }
-
   const messages: SDKUserMessage[] = [];
   for await (const message of prompt) {
     messages.push(message);
+    break;
   }
   return messages;
 }
@@ -94,7 +159,7 @@ const providerToolHostTestLayer = Layer.succeed(ProviderToolHost, {
 function makeTestLayer(input: {
   readonly stateDir: string;
   readonly createQuery: (input: {
-    readonly prompt: string | AsyncIterable<SDKUserMessage>;
+    readonly prompt: AsyncIterable<SDKUserMessage>;
     readonly options: Record<string, unknown>;
   }) => ClaudeQuery;
 }) {
@@ -120,12 +185,11 @@ it.effect("maps Claude ultrathink to prompt injection and 1M beta in local mode"
     stateDir,
     createQuery: ({ prompt, options }) => {
       capturedOptions = options;
+      const query = new FakeClaudeQuery();
       void collectPromptMessages(prompt).then((messages) => {
         capturedPromptMessages = messages;
         resolveCapturedPromptMessages(messages);
-      });
-      return makeFakeQuery([
-        {
+        query.emit({
           type: "assistant",
           session_id: "session-1",
           parent_tool_use_id: null,
@@ -134,8 +198,8 @@ it.effect("maps Claude ultrathink to prompt injection and 1M beta in local mode"
             role: "assistant",
             content: [{ type: "text", text: "Done" }],
           },
-        } as unknown as SDKMessage,
-        {
+        } as unknown as SDKMessage);
+        query.emit({
           type: "result",
           subtype: "success",
           is_error: false,
@@ -150,8 +214,10 @@ it.effect("maps Claude ultrathink to prompt injection and 1M beta in local mode"
           permission_denials: [],
           uuid: "result-1",
           result: "Done",
-        } as unknown as SDKMessage,
-      ]);
+        } as unknown as SDKMessage);
+        query.finish();
+      });
+      return query as unknown as ClaudeQuery;
     },
   });
 
@@ -215,12 +281,11 @@ it.effect("accepts local Claude image attachments", () => {
   const layer = makeTestLayer({
     stateDir,
     createQuery: ({ prompt }) => {
+      const query = new FakeClaudeQuery();
       void collectPromptMessages(prompt).then((messages) => {
         capturedPromptMessages = messages;
         resolveCapturedPromptMessages(messages);
-      });
-      return makeFakeQuery([
-        {
+        query.emit({
           type: "result",
           subtype: "success",
           is_error: false,
@@ -235,8 +300,10 @@ it.effect("accepts local Claude image attachments", () => {
           permission_denials: [],
           uuid: "result-2",
           result: "",
-        } as unknown as SDKMessage,
-      ]);
+        } as unknown as SDKMessage);
+        query.finish();
+      });
+      return query as unknown as ClaudeQuery;
     },
   });
 
@@ -287,11 +354,14 @@ it.effect("handles local Claude AskUserQuestion prompts", () => {
 
   const layer = makeTestLayer({
     stateDir,
-    createQuery: ({ options }) => {
+    createQuery: ({ prompt, options }) => {
       const canUseTool = options.canUseTool as CanUseTool | undefined;
-      const iterator = (async function* () {
+      const query = new FakeClaudeQuery();
+      void (async () => {
+        await collectPromptMessages(prompt);
         if (!canUseTool) {
-          throw new Error("Expected Claude canUseTool callback");
+          query.fail(new Error("Expected Claude canUseTool callback"));
+          return;
         }
 
         const permissionResult = await canUseTool(
@@ -316,7 +386,7 @@ it.effect("handles local Claude AskUserQuestion prompts", () => {
         capturedPermissionResult = permissionResult;
         resolveCapturedPermissionResult(permissionResult);
 
-        yield {
+        query.emit({
           type: "result",
           subtype: "success",
           is_error: false,
@@ -331,10 +401,11 @@ it.effect("handles local Claude AskUserQuestion prompts", () => {
           permission_denials: [],
           uuid: "result-3",
           result: "",
-        } as unknown as SDKMessage;
+        } as unknown as SDKMessage);
+        query.finish();
       })();
 
-      return Object.assign(iterator, makeFakeQuery([]));
+      return query as unknown as ClaudeQuery;
     },
   });
 
@@ -435,12 +506,15 @@ it.effect("keeps AskUserQuestion active for local-proxy Claude full-access sessi
 
   const layer = makeTestLayer({
     stateDir,
-    createQuery: ({ options }) => {
+    createQuery: ({ prompt, options }) => {
       capturedOptions = options;
       const canUseTool = options.canUseTool as CanUseTool | undefined;
-      const iterator = (async function* () {
+      const query = new FakeClaudeQuery();
+      void (async () => {
+        await collectPromptMessages(prompt);
         if (!canUseTool) {
-          throw new Error("Expected Claude canUseTool callback");
+          query.fail(new Error("Expected Claude canUseTool callback"));
+          return;
         }
 
         const permissionResult = await canUseTool(
@@ -465,7 +539,7 @@ it.effect("keeps AskUserQuestion active for local-proxy Claude full-access sessi
         capturedPermissionResult = permissionResult;
         resolveCapturedPermissionResult(permissionResult);
 
-        yield {
+        query.emit({
           type: "result",
           subtype: "success",
           is_error: false,
@@ -480,10 +554,11 @@ it.effect("keeps AskUserQuestion active for local-proxy Claude full-access sessi
           permission_denials: [],
           uuid: "result-local-proxy-1",
           result: "",
-        } as unknown as SDKMessage;
+        } as unknown as SDKMessage);
+        query.finish();
       })();
 
-      return Object.assign(iterator, makeFakeQuery([]));
+      return query as unknown as ClaudeQuery;
     },
   });
 
@@ -583,11 +658,14 @@ it.effect("surfaces approval requests for local-proxy Claude approval-required s
 
   const layer = makeTestLayer({
     stateDir,
-    createQuery: ({ options }) => {
+    createQuery: ({ prompt, options }) => {
       const canUseTool = options.canUseTool as CanUseTool | undefined;
-      const iterator = (async function* () {
+      const query = new FakeClaudeQuery();
+      void (async () => {
+        await collectPromptMessages(prompt);
         if (!canUseTool) {
-          throw new Error("Expected Claude canUseTool callback");
+          query.fail(new Error("Expected Claude canUseTool callback"));
+          return;
         }
 
         const permissionResult = await canUseTool(
@@ -598,7 +676,7 @@ it.effect("surfaces approval requests for local-proxy Claude approval-required s
         capturedPermissionResult = permissionResult;
         resolveCapturedPermissionResult(permissionResult);
 
-        yield {
+        query.emit({
           type: "result",
           subtype: "success",
           is_error: false,
@@ -613,10 +691,11 @@ it.effect("surfaces approval requests for local-proxy Claude approval-required s
           permission_denials: [],
           uuid: "result-local-proxy-2",
           result: "",
-        } as unknown as SDKMessage;
+        } as unknown as SDKMessage);
+        query.finish();
       })();
 
-      return Object.assign(iterator, makeFakeQuery([]));
+      return query as unknown as ClaudeQuery;
     },
   });
 
