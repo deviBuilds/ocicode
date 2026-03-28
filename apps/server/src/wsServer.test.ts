@@ -10,6 +10,7 @@ import { createServer } from "./wsServer";
 import WebSocket from "ws";
 import { ServerConfig, type ServerConfigShape } from "./config";
 import { makeServerProviderLayer, makeServerRuntimeServicesLayer } from "./serverLayers";
+import { ServerSettingsService } from "./serverSettings";
 
 import {
   DEFAULT_TERMINAL_ID,
@@ -465,6 +466,7 @@ describe("WebSocket Server", () => {
       Layer.provideMerge(runtimeLayer),
       Layer.provideMerge(providerHealthLayer),
       Layer.provideMerge(openLayer),
+      Layer.provideMerge(ServerSettingsService.layerTest()),
       Layer.provideMerge(serverConfigLayer),
       Layer.provideMerge(NodeServices.layer),
     );

@@ -21,6 +21,7 @@ import {
 import { Effect, Fiber, Layer, Option, Stream } from "effect";
 
 import { ServerConfig } from "../../config.ts";
+import { ServerSettingsService } from "../../serverSettings.ts";
 import { CLAUDE_CONTEXT_1M_BETA } from "../claudeSupport.ts";
 import { ClaudeAdapter } from "../Services/ClaudeAdapter.ts";
 import { ProviderToolHost } from "../Services/ProviderToolHost.ts";
@@ -167,6 +168,7 @@ function makeTestLayer(input: {
     createQuery: ({ prompt, options }) => input.createQuery({ prompt, options }),
   }).pipe(
     Layer.provideMerge(ServerConfig.layerTest(process.cwd(), input.stateDir)),
+    Layer.provideMerge(ServerSettingsService.layerTest()),
     Layer.provideMerge(providerToolHostTestLayer),
     Layer.provideMerge(NodeServices.layer),
   );

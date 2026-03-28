@@ -37,6 +37,7 @@ import { Cause, Effect, FileSystem, Fiber, Layer, Queue, Schema, Stream } from "
 
 import { resolveAttachmentPath } from "../../attachmentStore.ts";
 import { ServerConfig } from "../../config.ts";
+import { ServerSettingsService } from "../../serverSettings.ts";
 import {
   ProviderAdapterProcessError,
   ProviderAdapterRequestError,
@@ -1187,6 +1188,7 @@ const makeClaudeAdapter = (options?: ClaudeAdapterLiveOptions) =>
     const providerToolHost = yield* ProviderToolHost;
     const fileSystem = yield* FileSystem.FileSystem;
     const serverConfig = yield* ServerConfig;
+    const serverSettingsService = yield* ServerSettingsService;
     const nativeEventLogger =
       options?.nativeEventLogger ??
       (options?.nativeEventLogPath !== undefined
@@ -2123,9 +2125,22 @@ const makeClaudeAdapter = (options?: ClaudeAdapterLiveOptions) =>
 
       return Effect.gen(function* () {
         const resumeState = readResumeState(input.resumeCursor);
-        const binaryPath = readClaudeBinaryPath({
-          providerOptions: input.providerOptions,
-        });
+        const configuredClaudeBinaryPath = yield* serverSettingsService.getSettings.pipe(
+          Effect.map((settings) => settings.providers.claudeAgent.binaryPath),
+          Effect.mapError(
+            (cause) =>
+              new ProviderAdapterProcessError({
+                provider: PROVIDER,
+                threadId: input.threadId,
+                detail: cause.message,
+                cause,
+              }),
+          ),
+        );
+        const binaryPath =
+          readClaudeBinaryPath({
+            providerOptions: input.providerOptions,
+          }) ?? configuredClaudeBinaryPath;
         const workspaceProxyMode = readWorkspaceProxyMode({
           providerOptions: input.providerOptions,
         });

@@ -184,6 +184,8 @@ export function createWsNativeApi(): NativeApi {
     },
     server: {
       getConfig: () => transport.request(WS_METHODS.serverGetConfig),
+      getSettings: () => transport.request(WS_METHODS.serverGetSettings),
+      updateSettings: (patch) => transport.request(WS_METHODS.serverUpdateSettings, { patch }),
       checkProviderHealth: (input) =>
         transport.request(WS_METHODS.serverCheckProviderHealth, input),
       upsertKeybinding: (input) => transport.request(WS_METHODS.serverUpsertKeybinding, input),

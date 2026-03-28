@@ -2,6 +2,7 @@
 import "../index.css";
 
 import {
+  DEFAULT_SERVER_SETTINGS,
   ORCHESTRATION_WS_METHODS,
   type MessageId,
   type OrchestrationReadModel,
@@ -111,6 +112,7 @@ function createBaseServerConfig(): ServerConfig {
       claudeBuildEnabled: false,
       remoteProviderModeBuildEnabled: true,
     },
+    settings: DEFAULT_SERVER_SETTINGS,
   };
 }
 

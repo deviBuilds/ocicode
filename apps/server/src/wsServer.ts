@@ -60,6 +60,7 @@ import { createLogger } from "./logger";
 import { GitManager } from "./git/Services/GitManager.ts";
 import { TerminalManager } from "./terminal/Services/Manager.ts";
 import { Keybindings } from "./keybindings";
+import { ServerSettingsService } from "./serverSettings";
 import { searchWorkspaceEntries } from "./workspaceEntries";
 import { OrchestrationEngineService } from "./orchestration/Services/OrchestrationEngine";
 import { ProjectionSnapshotQuery } from "./orchestration/Services/ProjectionSnapshotQuery";
@@ -224,7 +225,8 @@ export type ServerCoreRuntimeServices =
   | OrchestrationReactor
   | ProviderService
   | ProviderHealth
-  | ProviderToolHost;
+  | ProviderToolHost
+  | ServerSettingsService;
 
 export type ServerRuntimeServices =
   | ServerCoreRuntimeServices
@@ -275,6 +277,7 @@ export const createServer = Effect.fn(function* (): Effect.fn.Return<
   const gitManager = yield* GitManager;
   const terminalManager = yield* TerminalManager;
   const keybindingsManager = yield* Keybindings;
+  const serverSettingsManager = yield* ServerSettingsService;
   const providerService = yield* ProviderService;
   const providerHealth = yield* ProviderHealth;
   const providerToolHost = yield* ProviderToolHost;
@@ -289,6 +292,16 @@ export const createServer = Effect.fn(function* (): Effect.fn.Return<
         detail: error.detail,
         cause: error.cause,
       }),
+    ),
+  );
+  yield* serverSettingsManager.start.pipe(
+    Effect.mapError(
+      (cause) => new ServerLifecycleError({ operation: "serverSettingsRuntimeStart", cause }),
+    ),
+  );
+  let currentSettings = yield* serverSettingsManager.getSettings.pipe(
+    Effect.mapError(
+      (cause) => new ServerLifecycleError({ operation: "serverSettingsGetSettings", cause }),
     ),
   );
 
@@ -787,6 +800,25 @@ export const createServer = Effect.fn(function* (): Effect.fn.Return<
     }),
   ).pipe(Effect.forkIn(subscriptionsScope));
 
+  yield* Stream.runForEach(serverSettingsManager.streamChanges, (settings) =>
+    Effect.sync(() => {
+      currentSettings = settings;
+    }).pipe(
+      Effect.flatMap(() =>
+        broadcastPush({
+          type: "push",
+          channel: WS_CHANNELS.serverConfigUpdated,
+          data: {
+            issues: [],
+            providers,
+            featureFlags,
+            settings,
+          },
+        }),
+      ),
+    ),
+  ).pipe(Effect.forkIn(subscriptionsScope));
+
   yield* Scope.provide(orchestrationReactor.start, subscriptionsScope);
 
   let welcomeBootstrapProjectId: ProjectId | undefined;
@@ -1049,7 +1081,18 @@ export const createServer = Effect.fn(function* (): Effect.fn.Return<
           providers,
           featureFlags,
           availableEditors,
+          settings: currentSettings,
         };
+
+      case WS_METHODS.serverGetSettings:
+        return yield* serverSettingsManager.getSettings;
+
+      case WS_METHODS.serverUpdateSettings: {
+        const body = stripRequestTag(request.body);
+        const settings = yield* serverSettingsManager.updateSettings(body.patch);
+        currentSettings = settings;
+        return settings;
+      }
 
       case WS_METHODS.serverCheckProviderHealth: {
         const body = stripRequestTag(request.body) as ProviderBridgeHealthInput;

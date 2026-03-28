@@ -3,6 +3,7 @@ import { IsoDateTime, TrimmedNonEmptyString } from "./baseSchemas";
 import { KeybindingRule, ResolvedKeybindingsConfig } from "./keybindings";
 import { EditorId } from "./editor";
 import { ProviderExecutionMode, ProviderKind } from "./orchestration";
+import { ServerSettings } from "./settings";
 
 const KeybindingsMalformedConfigIssue = Schema.Struct({
   kind: Schema.Literal("keybindings.malformed-config"),
@@ -60,6 +61,7 @@ export const ServerConfig = Schema.Struct({
   providers: ServerProviderStatuses,
   featureFlags: ServerFeatureFlags,
   availableEditors: Schema.Array(EditorId),
+  settings: ServerSettings,
 });
 export type ServerConfig = typeof ServerConfig.Type;
 
@@ -76,5 +78,6 @@ export const ServerConfigUpdatedPayload = Schema.Struct({
   issues: ServerConfigIssues,
   providers: ServerProviderStatuses,
   featureFlags: ServerFeatureFlags,
+  settings: Schema.optional(ServerSettings),
 });
 export type ServerConfigUpdatedPayload = typeof ServerConfigUpdatedPayload.Type;

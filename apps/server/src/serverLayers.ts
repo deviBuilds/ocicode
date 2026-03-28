@@ -23,6 +23,7 @@ import { makeProviderAdapterRegistryLive } from "./provider/Layers/ProviderAdapt
 import { makeProviderServiceLive } from "./provider/Layers/ProviderService";
 import { ProviderSessionDirectoryLive } from "./provider/Layers/ProviderSessionDirectory";
 import { ProviderToolHostLive } from "./provider/Layers/ProviderToolHost";
+import { ProviderAdapterRegistry } from "./provider/Services/ProviderAdapterRegistry";
 import { ProviderService } from "./provider/Services/ProviderService";
 import { ProviderToolHost } from "./provider/Services/ProviderToolHost";
 import { makeEventNdjsonLogger } from "./provider/Layers/EventNdjsonLogger";
@@ -34,6 +35,7 @@ import { GitCoreLive } from "./git/Layers/GitCore";
 import { GitHubCliLive } from "./git/Layers/GitHubCli";
 import { CodexTextGenerationLive } from "./git/Layers/CodexTextGeneration";
 import { GitServiceLive } from "./git/Layers/GitService";
+import { ServerSettingsService } from "./serverSettings";
 import { PtyAdapter } from "./terminal/Services/PTY";
 
 type RuntimePtyAdapterLoader = {
@@ -56,7 +58,7 @@ const makeRuntimePtyAdapterLayer = () =>
 export function makeServerProviderLayer(): Layer.Layer<
   ProviderService | ProviderToolHost,
   ProviderUnsupportedError,
-  SqlClient.SqlClient | ServerConfig | FileSystem.FileSystem
+  SqlClient.SqlClient | ServerConfig | ServerSettingsService | FileSystem.FileSystem
 > {
   return Effect.gen(function* () {
     const { enableClaudeProvider, stateDir } = yield* ServerConfig;
@@ -75,21 +77,29 @@ export function makeServerProviderLayer(): Layer.Layer<
     const codexAdapterLayer = makeCodexAdapterLive(
       nativeEventLogger ? { nativeEventLogger } : undefined,
     );
-    const adapterRegistryLayer = enableClaudeProvider
-      ? makeProviderAdapterRegistryLive({ includeClaudeAdapter: true }).pipe(
-          Layer.provide(codexAdapterLayer),
-          Layer.provide(
-            yield* Effect.promise(() =>
-              import("./provider/Layers/ClaudeAdapter").then((module) =>
-                module.makeClaudeAdapterLive(nativeEventLogger ? { nativeEventLogger } : undefined),
-              ),
-            ),
-          ),
-          Layer.provide(providerToolHostLayer),
-        )
-      : makeProviderAdapterRegistryLive({ includeClaudeAdapter: false }).pipe(
-          Layer.provide(codexAdapterLayer),
-        );
+    let adapterRegistryLayer: Layer.Layer<
+      ProviderAdapterRegistry,
+      never,
+      FileSystem.FileSystem | ServerConfig | ServerSettingsService | ProviderToolHost
+    >;
+
+    if (enableClaudeProvider) {
+      const claudeAdapterLayer = yield* Effect.promise(() =>
+        import("./provider/Layers/ClaudeAdapter").then((module) =>
+          module.makeClaudeAdapterLive(nativeEventLogger ? { nativeEventLogger } : undefined),
+        ),
+      );
+
+      adapterRegistryLayer = makeProviderAdapterRegistryLive({ includeClaudeAdapter: true }).pipe(
+        Layer.provide(codexAdapterLayer),
+        Layer.provide(claudeAdapterLayer.pipe(Layer.provide(providerToolHostLayer))),
+      );
+    } else {
+      adapterRegistryLayer = makeProviderAdapterRegistryLive({ includeClaudeAdapter: false }).pipe(
+        Layer.provide(codexAdapterLayer),
+      );
+    }
+
     const providerServiceLayer = makeProviderServiceLive(
       canonicalEventLogger ? { canonicalEventLogger } : undefined,
     ).pipe(

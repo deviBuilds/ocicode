@@ -15,6 +15,7 @@ import { Button } from "../components/ui/button";
 import { AnchoredToastProvider, ToastProvider, toastManager } from "../components/ui/toast";
 import { serverConfigQueryOptions, serverQueryKeys } from "../lib/serverReactQuery";
 import { readNativeApi } from "../nativeApi";
+import { migrateLocalSettingsToServer } from "../appSettings";
 import { useComposerDraftStore } from "../composerDraftStore";
 import { useStore } from "../store";
 import { useTerminalStateStore } from "../terminalStateStore";
@@ -36,6 +37,10 @@ export const Route = createRootRouteWithContext<{
 });
 
 function RootRouteView() {
+  useEffect(() => {
+    migrateLocalSettingsToServer();
+  }, []);
+
   if (!readNativeApi()) {
     return (
       <div className="flex h-screen flex-col bg-background text-foreground">
@@ -261,6 +266,9 @@ function EventRouter() {
       lastConfigIssuesSignatureRef.current = signature;
 
       void queryClient.invalidateQueries({ queryKey: serverQueryKeys.config() });
+      if (payload.settings !== undefined) {
+        return;
+      }
       const issue = payload.issues.find((entry) => entry.kind.startsWith("keybindings."));
       if (!issue) {
         toastManager.add({

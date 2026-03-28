@@ -22,6 +22,7 @@ import { Open } from "./open";
 import * as SqlitePersistence from "./persistence/Layers/Sqlite";
 import { makeServerProviderLayer, makeServerRuntimeServicesLayer } from "./serverLayers";
 import { ProviderHealthLive } from "./provider/Layers/ProviderHealth";
+import { ServerSettingsLive } from "./serverSettings";
 import { Server } from "./wsServer";
 import { ServerLoggerLive } from "./serverLogger";
 import { readBootstrapEnvelope } from "./bootstrap";
@@ -331,6 +332,7 @@ const LayerLive = (input: CliInput) =>
     Layer.provideMerge(makeServerRuntimeServicesLayer()),
     Layer.provideMerge(makeServerProviderLayer()),
     Layer.provideMerge(ProviderHealthLive),
+    Layer.provideMerge(ServerSettingsLive),
     Layer.provideMerge(SqlitePersistence.layerConfig),
     Layer.provideMerge(ServerLoggerLive),
     Layer.provideMerge(ServerConfigLive(input)),
