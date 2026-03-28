@@ -17,13 +17,20 @@ export const ProviderStatusBanner = memo(function ProviderStatusBanner({
     status.status === "error"
       ? `${status.provider} provider is unavailable.`
       : `${status.provider} provider has limited availability.`;
+  const providerLabel = status.provider === "claudeAgent" ? "Claude" : "Codex";
+  const executionLabel =
+    status.executionMode === "remote"
+      ? "Remote"
+      : status.executionMode === "local"
+        ? "Local"
+        : null;
 
   return (
     <div className="mx-auto max-w-[57.5rem] px-4 pt-4 sm:px-6">
       <Alert variant={status.status === "error" ? "error" : "warning"}>
         <CircleAlertIcon />
         <AlertTitle>
-          {status.provider === "codex" ? "Codex provider status" : `${status.provider} status`}
+          {executionLabel ? `${executionLabel} ${providerLabel} status` : `${providerLabel} status`}
         </AlertTitle>
         <AlertDescription className="line-clamp-3" title={status.message ?? defaultMessage}>
           {status.message ?? defaultMessage}

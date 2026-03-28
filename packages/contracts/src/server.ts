@@ -2,7 +2,7 @@ import { Schema } from "effect";
 import { IsoDateTime, TrimmedNonEmptyString } from "./baseSchemas";
 import { KeybindingRule, ResolvedKeybindingsConfig } from "./keybindings";
 import { EditorId } from "./editor";
-import { ProviderKind } from "./orchestration";
+import { ProviderExecutionMode, ProviderKind } from "./orchestration";
 
 const KeybindingsMalformedConfigIssue = Schema.Struct({
   kind: Schema.Literal("keybindings.malformed-config"),
@@ -35,6 +35,7 @@ export type ServerProviderAuthStatus = typeof ServerProviderAuthStatus.Type;
 
 export const ServerProviderStatus = Schema.Struct({
   provider: ProviderKind,
+  executionMode: Schema.optional(ProviderExecutionMode),
   status: ServerProviderStatusState,
   available: Schema.Boolean,
   authStatus: ServerProviderAuthStatus,
@@ -45,12 +46,19 @@ export type ServerProviderStatus = typeof ServerProviderStatus.Type;
 
 const ServerProviderStatuses = Schema.Array(ServerProviderStatus);
 
+export const ServerFeatureFlags = Schema.Struct({
+  claudeBuildEnabled: Schema.Boolean,
+  remoteProviderModeBuildEnabled: Schema.Boolean,
+});
+export type ServerFeatureFlags = typeof ServerFeatureFlags.Type;
+
 export const ServerConfig = Schema.Struct({
   cwd: TrimmedNonEmptyString,
   keybindingsConfigPath: TrimmedNonEmptyString,
   keybindings: ResolvedKeybindingsConfig,
   issues: ServerConfigIssues,
   providers: ServerProviderStatuses,
+  featureFlags: ServerFeatureFlags,
   availableEditors: Schema.Array(EditorId),
 });
 export type ServerConfig = typeof ServerConfig.Type;
@@ -67,5 +75,6 @@ export type ServerUpsertKeybindingResult = typeof ServerUpsertKeybindingResult.T
 export const ServerConfigUpdatedPayload = Schema.Struct({
   issues: ServerConfigIssues,
   providers: ServerProviderStatuses,
+  featureFlags: ServerFeatureFlags,
 });
 export type ServerConfigUpdatedPayload = typeof ServerConfigUpdatedPayload.Type;

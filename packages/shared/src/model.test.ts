@@ -14,6 +14,7 @@ describe("normalizeModelSlug", () => {
   it("maps known aliases to canonical slugs", () => {
     expect(normalizeModelSlug("5.3")).toBe("gpt-5.3-codex");
     expect(normalizeModelSlug("gpt-5.3")).toBe("gpt-5.3-codex");
+    expect(normalizeModelSlug("sonnet", "claudeAgent")).toBe("claude-sonnet-4-6");
   });
 
   it("returns null for empty or missing values", () => {
@@ -54,16 +55,32 @@ describe("resolveModelSlug", () => {
     expect(getDefaultModel()).toBe(DEFAULT_MODEL_BY_PROVIDER.codex);
     expect(getModelOptions()).toEqual(MODEL_OPTIONS_BY_PROVIDER.codex);
   });
+
+  it("returns claude options for claude", () => {
+    expect(getDefaultModel("claudeAgent")).toBe(DEFAULT_MODEL_BY_PROVIDER.claudeAgent);
+    expect(getModelOptions("claudeAgent")).toEqual(MODEL_OPTIONS_BY_PROVIDER.claudeAgent);
+  });
 });
 
 describe("getReasoningEffortOptions", () => {
   it("returns codex reasoning options for codex", () => {
     expect(getReasoningEffortOptions("codex")).toEqual(["xhigh", "high", "medium", "low"]);
   });
+
+  it("returns claude reasoning options for claude", () => {
+    expect(getReasoningEffortOptions("claudeAgent")).toEqual([
+      "low",
+      "medium",
+      "high",
+      "max",
+      "ultrathink",
+    ]);
+  });
 });
 
 describe("getDefaultReasoningEffort", () => {
   it("returns provider-scoped defaults", () => {
     expect(getDefaultReasoningEffort("codex")).toBe("high");
+    expect(getDefaultReasoningEffort("claudeAgent")).toBe("high");
   });
 });

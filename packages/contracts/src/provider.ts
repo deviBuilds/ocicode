@@ -15,11 +15,13 @@ import {
   PROVIDER_SEND_TURN_MAX_INPUT_CHARS,
   ProviderApprovalDecision,
   ProviderApprovalPolicy,
+  ProviderExecutionMode,
   ProviderInteractionMode,
   ProviderKind,
   ProviderRequestKind,
   ProviderSandboxMode,
   ProviderUserInputAnswers,
+  ProviderWorkspaceProxyMode,
   RuntimeMode,
 } from "./orchestration";
 
@@ -48,12 +50,33 @@ export const ProviderSession = Schema.Struct({
 export type ProviderSession = typeof ProviderSession.Type;
 
 const CodexProviderStartOptions = Schema.Struct({
+  executionMode: Schema.optional(ProviderExecutionMode),
   binaryPath: Schema.optional(TrimmedNonEmptyStringSchema),
   homePath: Schema.optional(TrimmedNonEmptyStringSchema),
+  remote: Schema.optional(
+    Schema.Struct({
+      baseUrl: Schema.optional(TrimmedNonEmptyStringSchema),
+      sharedSecret: Schema.optional(TrimmedNonEmptyStringSchema),
+      workspaceProxyMode: Schema.optional(ProviderWorkspaceProxyMode),
+    }),
+  ),
+});
+
+const ClaudeProviderStartOptions = Schema.Struct({
+  executionMode: Schema.optional(ProviderExecutionMode),
+  binaryPath: Schema.optional(TrimmedNonEmptyStringSchema),
+  remote: Schema.optional(
+    Schema.Struct({
+      baseUrl: Schema.optional(TrimmedNonEmptyStringSchema),
+      sharedSecret: Schema.optional(TrimmedNonEmptyStringSchema),
+      workspaceProxyMode: Schema.optional(ProviderWorkspaceProxyMode),
+    }),
+  ),
 });
 
 export const ProviderStartOptions = Schema.Struct({
   codex: Schema.optional(CodexProviderStartOptions),
+  claudeAgent: Schema.optional(ClaudeProviderStartOptions),
 });
 export type ProviderStartOptions = typeof ProviderStartOptions.Type;
 

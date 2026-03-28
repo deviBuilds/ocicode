@@ -122,6 +122,18 @@ const CliEnvConfig = Config.all({
     Config.option,
     Config.map(Option.getOrUndefined),
   ),
+  enableClaudeProvider: Config.boolean("OCICODE_ENABLE_CLAUDE_PROVIDER").pipe(
+    Config.option,
+    Config.map(Option.getOrUndefined),
+  ),
+  enableRemoteProviderMode: Config.boolean("OCICODE_ENABLE_REMOTE_PROVIDER_MODE").pipe(
+    Config.option,
+    Config.map(Option.getOrUndefined),
+  ),
+  providerBridgeSharedSecret: Config.string("OCICODE_PROVIDER_BRIDGE_SHARED_SECRET").pipe(
+    Config.option,
+    Config.map(Option.getOrUndefined),
+  ),
   bootstrapFd: Config.int("OCICODE_BOOTSTRAP_FD").pipe(
     Config.option,
     Config.map(Option.getOrUndefined),
@@ -257,6 +269,17 @@ const ServerConfigLive = (input: CliInput) =>
           () => mode === "web",
         ),
       );
+      const enableClaudeProvider = Option.getOrElse(
+        optionFromUndefined(env.enableClaudeProvider),
+        () => false,
+      );
+      const enableRemoteProviderMode = Option.getOrElse(
+        optionFromUndefined(env.enableRemoteProviderMode),
+        () => true,
+      );
+      const providerBridgeSharedSecret = Option.getOrUndefined(
+        optionFromUndefined(env.providerBridgeSharedSecret),
+      );
       const logWebSocketEvents = resolveBooleanFlag(
         input.logWebSocketEvents,
         Option.getOrElse(
@@ -285,6 +308,9 @@ const ServerConfigLive = (input: CliInput) =>
         mode,
         port,
         cwd: cliConfig.cwd,
+        enableClaudeProvider,
+        enableRemoteProviderMode,
+        providerBridgeSharedSecret,
         keybindingsConfigPath,
         host,
         stateDir,

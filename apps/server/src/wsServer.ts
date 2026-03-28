@@ -18,7 +18,17 @@ import {
   ORCHESTRATION_WS_CHANNELS,
   ORCHESTRATION_WS_METHODS,
   PROVIDER_SEND_TURN_MAX_IMAGE_BYTES,
+  PROVIDER_BRIDGE_CHANNELS,
+  PROVIDER_BRIDGE_METHODS,
+  PROVIDER_BRIDGE_WS_PATH,
+  ProviderBridgeRequest,
+  ProviderBridgeResponse,
+  ProviderBridgeThreadSnapshot,
   ProjectId,
+  ProviderBridgeHealthInput,
+  ProviderToolHostRequest,
+  ProviderToolHostResponse,
+  PROVIDER_TOOL_HOST_WS_PATH,
   ThreadId,
   TerminalEvent,
   WS_CHANNELS,
@@ -35,6 +45,7 @@ import {
   Exit,
   FileSystem,
   Layer,
+  Option,
   Path,
   Ref,
   Schema,
@@ -55,6 +66,7 @@ import { ProjectionSnapshotQuery } from "./orchestration/Services/ProjectionSnap
 import { OrchestrationReactor } from "./orchestration/Services/OrchestrationReactor";
 import { ProviderService } from "./provider/Services/ProviderService";
 import { ProviderHealth } from "./provider/Services/ProviderHealth";
+import { ProviderToolHost } from "./provider/Services/ProviderToolHost";
 import { CheckpointDiffQuery } from "./checkpointing/Services/CheckpointDiffQuery";
 import { clamp } from "effect/Number";
 import { Open, resolveAvailableEditors } from "./open";
@@ -153,6 +165,10 @@ function toPosixRelativePath(input: string): string {
   return input.replaceAll("\\", "/");
 }
 
+function pendingToolHostRequestKey(threadId: ThreadId, requestId: string): string {
+  return `${threadId}\n${requestId}`;
+}
+
 function resolveWorkspaceWritePath(params: {
   workspaceRoot: string;
   relativePath: string;
@@ -207,7 +223,8 @@ export type ServerCoreRuntimeServices =
   | CheckpointDiffQuery
   | OrchestrationReactor
   | ProviderService
-  | ProviderHealth;
+  | ProviderHealth
+  | ProviderToolHost;
 
 export type ServerRuntimeServices =
   | ServerCoreRuntimeServices
@@ -238,6 +255,9 @@ export const createServer = Effect.fn(function* (): Effect.fn.Return<
   const {
     port,
     cwd,
+    enableClaudeProvider,
+    enableRemoteProviderMode,
+    providerBridgeSharedSecret,
     keybindingsConfigPath,
     staticDir,
     devUrl,
@@ -246,12 +266,18 @@ export const createServer = Effect.fn(function* (): Effect.fn.Return<
     logWebSocketEvents,
     autoBootstrapProjectFromCwd,
   } = serverConfig;
+  const featureFlags = {
+    claudeBuildEnabled: enableClaudeProvider,
+    remoteProviderModeBuildEnabled: enableRemoteProviderMode,
+  } as const;
   const availableEditors = resolveAvailableEditors();
 
   const gitManager = yield* GitManager;
   const terminalManager = yield* TerminalManager;
   const keybindingsManager = yield* Keybindings;
+  const providerService = yield* ProviderService;
   const providerHealth = yield* ProviderHealth;
+  const providerToolHost = yield* ProviderToolHost;
   const git = yield* GitCore;
   const fileSystem = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
@@ -267,7 +293,62 @@ export const createServer = Effect.fn(function* (): Effect.fn.Return<
   );
 
   const clients = yield* Ref.make(new Set<WebSocket>());
+  const providerBridgeClients = yield* Ref.make(
+    new Set<{ ws: WebSocket; threadIds: Set<ThreadId> }>(),
+  );
+  const pendingToolHostRequests = yield* Ref.make(
+    new Map<
+      string,
+      {
+        requestId: string;
+        threadId: ThreadId;
+        ws: WebSocket;
+      }
+    >(),
+  );
   const logger = createLogger("ws");
+
+  const flushPendingToolHostRequests = Effect.fnUntraced(function* (input: {
+    readonly predicate: (entry: {
+      requestId: string;
+      threadId: ThreadId;
+      ws: WebSocket;
+    }) => boolean;
+    readonly errorMessage?: string;
+  }) {
+    const drained = yield* Ref.modify(pendingToolHostRequests, (pending) => {
+      const next = new Map(pending);
+      const matched: Array<{
+        requestId: string;
+        threadId: ThreadId;
+        ws: WebSocket;
+      }> = [];
+      for (const [key, entry] of next) {
+        if (!input.predicate(entry)) {
+          continue;
+        }
+        matched.push(entry);
+        next.delete(key);
+      }
+      return [matched, next] as const;
+    });
+
+    if (!input.errorMessage) {
+      return;
+    }
+
+    for (const entry of drained) {
+      if (entry.ws.readyState !== entry.ws.OPEN) {
+        continue;
+      }
+      entry.ws.send(
+        JSON.stringify({
+          id: entry.requestId,
+          error: { message: input.errorMessage },
+        } satisfies ProviderToolHostResponse),
+      );
+    }
+  });
 
   function logOutgoingPush(push: WsPush, recipients: number) {
     if (!logWebSocketEvents) return;
@@ -297,6 +378,30 @@ export const createServer = Effect.fn(function* (): Effect.fn.Return<
       channel: WS_CHANNELS.terminalEvent,
       data: event,
     });
+  });
+
+  const broadcastProviderBridgeEvent = Effect.fnUntraced(function* (event: unknown) {
+    const message = JSON.stringify({
+      type: "push",
+      channel: PROVIDER_BRIDGE_CHANNELS.providerEvent,
+      data: event,
+    });
+    for (const client of yield* Ref.get(providerBridgeClients)) {
+      if (client.ws.readyState !== client.ws.OPEN) {
+        continue;
+      }
+      const threadId =
+        typeof event === "object" &&
+        event !== null &&
+        "threadId" in event &&
+        typeof (event as { threadId?: unknown }).threadId === "string"
+          ? ThreadId.makeUnsafe((event as { threadId: string }).threadId)
+          : null;
+      if (threadId && !client.threadIds.has(threadId)) {
+        continue;
+      }
+      client.ws.send(message);
+    }
   });
 
   const normalizeDispatchCommand = Effect.fnUntraced(function* (input: {
@@ -579,6 +684,8 @@ export const createServer = Effect.fn(function* (): Effect.fn.Return<
 
   // WebSocket server — upgrades from the HTTP server
   const wss = new WebSocketServer({ noServer: true });
+  const providerBridgeWss = new WebSocketServer({ noServer: true });
+  const providerToolHostWss = new WebSocketServer({ noServer: true });
 
   const closeWebSocketServer = Effect.callback<void, ServerLifecycleError>((resume) => {
     wss.close((error) => {
@@ -586,6 +693,34 @@ export const createServer = Effect.fn(function* (): Effect.fn.Return<
         resume(
           Effect.fail(
             new ServerLifecycleError({ operation: "closeWebSocketServer", cause: error }),
+          ),
+        );
+      } else {
+        resume(Effect.void);
+      }
+    });
+  });
+
+  const closeProviderBridgeServer = Effect.callback<void, ServerLifecycleError>((resume) => {
+    providerBridgeWss.close((error) => {
+      if (error && !isServerNotRunningError(error)) {
+        resume(
+          Effect.fail(
+            new ServerLifecycleError({ operation: "closeProviderBridgeServer", cause: error }),
+          ),
+        );
+      } else {
+        resume(Effect.void);
+      }
+    });
+  });
+
+  const closeProviderToolHostServer = Effect.callback<void, ServerLifecycleError>((resume) => {
+    providerToolHostWss.close((error) => {
+      if (error && !isServerNotRunningError(error)) {
+        resume(
+          Effect.fail(
+            new ServerLifecycleError({ operation: "closeProviderToolHostServer", cause: error }),
           ),
         );
       } else {
@@ -621,6 +756,7 @@ export const createServer = Effect.fn(function* (): Effect.fn.Return<
         data: {
           issues: [],
           providers: statuses,
+          featureFlags,
         },
       });
     }),
@@ -635,6 +771,10 @@ export const createServer = Effect.fn(function* (): Effect.fn.Return<
     }),
   ).pipe(Effect.forkIn(subscriptionsScope));
 
+  yield* Stream.runForEach(providerService.streamEvents, (event) =>
+    broadcastProviderBridgeEvent(event),
+  ).pipe(Effect.forkIn(subscriptionsScope));
+
   yield* Stream.runForEach(keybindingsManager.changes, (event) =>
     broadcastPush({
       type: "push",
@@ -642,6 +782,7 @@ export const createServer = Effect.fn(function* (): Effect.fn.Return<
       data: {
         issues: event.issues,
         providers,
+        featureFlags,
       },
     }),
   ).pipe(Effect.forkIn(subscriptionsScope));
@@ -728,6 +869,16 @@ export const createServer = Effect.fn(function* (): Effect.fn.Return<
   yield* Effect.addFinalizer(() =>
     Effect.all([
       closeAllClients,
+      closeProviderBridgeServer.pipe(
+        Effect.catch((error) =>
+          Effect.logWarning("failed to close provider bridge server", { cause: error }),
+        ),
+      ),
+      closeProviderToolHostServer.pipe(
+        Effect.catch((error) =>
+          Effect.logWarning("failed to close provider tool host server", { cause: error }),
+        ),
+      ),
       closeWebSocketServer.pipe(
         Effect.catch((error) =>
           Effect.logWarning("failed to close web socket server", { cause: error }),
@@ -896,8 +1047,14 @@ export const createServer = Effect.fn(function* (): Effect.fn.Return<
           keybindings: keybindingsConfig.keybindings,
           issues: keybindingsConfig.issues,
           providers,
+          featureFlags,
           availableEditors,
         };
+
+      case WS_METHODS.serverCheckProviderHealth: {
+        const body = stripRequestTag(request.body) as ProviderBridgeHealthInput;
+        return yield* providerHealth.checkStatus(body);
+      }
 
       case WS_METHODS.serverUpsertKeybinding: {
         const body = stripRequestTag(request.body);
@@ -955,19 +1112,328 @@ export const createServer = Effect.fn(function* (): Effect.fn.Return<
     ws.send(response);
   });
 
+  const routeProviderBridgeRequest = Effect.fnUntraced(function* (
+    request: ProviderBridgeRequest,
+    client: { ws: WebSocket; threadIds: Set<ThreadId> },
+  ) {
+    switch (request.body._tag) {
+      case PROVIDER_BRIDGE_METHODS.startSession: {
+        const body = stripRequestTag(request.body);
+        const session = yield* providerService.startSession(body.threadId, body);
+        client.threadIds.add(body.threadId);
+        return session;
+      }
+
+      case PROVIDER_BRIDGE_METHODS.sendTurn: {
+        const body = stripRequestTag(request.body);
+        return yield* providerService.sendTurn(body);
+      }
+
+      case PROVIDER_BRIDGE_METHODS.interruptTurn: {
+        const body = stripRequestTag(request.body);
+        yield* providerService.interruptTurn(body);
+        return {};
+      }
+
+      case PROVIDER_BRIDGE_METHODS.respondToRequest: {
+        const body = stripRequestTag(request.body);
+        yield* providerService.respondToRequest(body);
+        return {};
+      }
+
+      case PROVIDER_BRIDGE_METHODS.respondToUserInput: {
+        const body = stripRequestTag(request.body);
+        yield* providerService.respondToUserInput(body);
+        return {};
+      }
+
+      case PROVIDER_BRIDGE_METHODS.stopSession: {
+        const body = stripRequestTag(request.body);
+        yield* providerService.stopSession(body);
+        client.threadIds.delete(body.threadId);
+        return {};
+      }
+
+      case PROVIDER_BRIDGE_METHODS.readThread: {
+        const body = stripRequestTag(request.body);
+        client.threadIds.add(body.threadId);
+        const snapshot = yield* providerService.readThread(body);
+        return Schema.decodeUnknownSync(ProviderBridgeThreadSnapshot)(snapshot);
+      }
+
+      case PROVIDER_BRIDGE_METHODS.rollbackThread: {
+        const body = stripRequestTag(request.body);
+        yield* providerService.rollbackConversation(body);
+        const snapshot = yield* providerService.readThread({ threadId: body.threadId });
+        return Schema.decodeUnknownSync(ProviderBridgeThreadSnapshot)(snapshot);
+      }
+
+      case PROVIDER_BRIDGE_METHODS.checkHealth: {
+        const body = stripRequestTag(request.body);
+        return yield* providerHealth.checkStatus(body);
+      }
+
+      case PROVIDER_BRIDGE_METHODS.resolveToolHostRequest: {
+        const body = stripRequestTag(request.body);
+        const key = pendingToolHostRequestKey(body.threadId, body.requestId);
+        const pending = yield* Ref.modify(pendingToolHostRequests, (requests) => {
+          const next = new Map(requests);
+          const resolved = next.get(key);
+          next.delete(key);
+          return [resolved, next] as const;
+        });
+        if (!pending || pending.ws.readyState !== pending.ws.OPEN) {
+          return {};
+        }
+        pending.ws.send(
+          JSON.stringify({
+            id: body.requestId,
+            ...(body.result !== undefined ? { result: body.result } : {}),
+            ...(body.error ? { error: body.error } : {}),
+          } satisfies ProviderToolHostResponse),
+        );
+        return {};
+      }
+
+      default: {
+        const _exhaustiveCheck: never = request.body;
+        return yield* new RouteRequestError({
+          message: `Unknown provider bridge method: ${String(_exhaustiveCheck)}`,
+        });
+      }
+    }
+  });
+
+  const handleProviderBridgeMessage = Effect.fnUntraced(function* (
+    client: { ws: WebSocket; threadIds: Set<ThreadId> },
+    raw: unknown,
+  ) {
+    const text = websocketRawToString(raw);
+    if (text === null) {
+      client.ws.send(
+        JSON.stringify({
+          id: "unknown",
+          error: { message: "Invalid provider bridge request format." },
+        } satisfies ProviderBridgeResponse),
+      );
+      return;
+    }
+
+    const request = Schema.decodeExit(Schema.fromJsonString(ProviderBridgeRequest))(text);
+    if (request._tag === "Failure") {
+      client.ws.send(
+        JSON.stringify({
+          id: "unknown",
+          error: { message: `Invalid provider bridge request: ${messageFromCause(request.cause)}` },
+        } satisfies ProviderBridgeResponse),
+      );
+      return;
+    }
+
+    const result = yield* Effect.exit(routeProviderBridgeRequest(request.value, client));
+    if (result._tag === "Failure") {
+      client.ws.send(
+        JSON.stringify({
+          id: request.value.id,
+          error: { message: messageFromCause(result.cause) },
+        } satisfies ProviderBridgeResponse),
+      );
+      return;
+    }
+
+    client.ws.send(
+      JSON.stringify({
+        id: request.value.id,
+        result: result.value,
+      } satisfies ProviderBridgeResponse),
+    );
+  });
+
+  const handleProviderToolHostMessage = Effect.fnUntraced(function* (
+    client: {
+      ws: WebSocket;
+      threadId: ThreadId;
+    },
+    raw: unknown,
+  ) {
+    const text = websocketRawToString(raw);
+    if (text === null) {
+      client.ws.send(
+        JSON.stringify({
+          id: "unknown",
+          error: { message: "Invalid provider tool host request format." },
+        } satisfies ProviderToolHostResponse),
+      );
+      return;
+    }
+
+    const request = Schema.decodeExit(Schema.fromJsonString(ProviderToolHostRequest))(text);
+    if (request._tag === "Failure") {
+      client.ws.send(
+        JSON.stringify({
+          id: "unknown",
+          error: {
+            message: `Invalid provider tool host request: ${messageFromCause(request.cause)}`,
+          },
+        } satisfies ProviderToolHostResponse),
+      );
+      return;
+    }
+
+    const bridgeClient = yield* Ref.get(providerBridgeClients).pipe(
+      Effect.map((clients) => {
+        for (const candidate of clients) {
+          if (
+            candidate.ws.readyState === candidate.ws.OPEN &&
+            candidate.threadIds.has(client.threadId)
+          ) {
+            return candidate;
+          }
+        }
+        return null;
+      }),
+    );
+
+    if (!bridgeClient) {
+      client.ws.send(
+        JSON.stringify({
+          id: request.value.id,
+          error: {
+            message:
+              "No remote provider bridge is attached to this thread's local workspace proxy.",
+          },
+        } satisfies ProviderToolHostResponse),
+      );
+      return;
+    }
+
+    const key = pendingToolHostRequestKey(client.threadId, request.value.id);
+    yield* Ref.update(pendingToolHostRequests, (requests) => {
+      const next = new Map(requests);
+      next.set(key, {
+        requestId: request.value.id,
+        threadId: client.threadId,
+        ws: client.ws,
+      });
+      return next;
+    });
+
+    yield* Effect.try({
+      try: () =>
+        bridgeClient.ws.send(
+          JSON.stringify({
+            type: "push",
+            channel: PROVIDER_BRIDGE_CHANNELS.toolHostRequest,
+            data: {
+              requestId: request.value.id,
+              threadId: client.threadId,
+              toolName: request.value.toolName,
+              ...(request.value.arguments !== undefined
+                ? { arguments: request.value.arguments }
+                : {}),
+            },
+          }),
+        ),
+      catch: (cause) =>
+        new RouteRequestError({
+          message:
+            cause instanceof Error
+              ? cause.message
+              : "Failed to forward provider tool host request.",
+        }),
+    }).pipe(
+      Effect.catch((cause) =>
+        Ref.update(pendingToolHostRequests, (requests) => {
+          const next = new Map(requests);
+          next.delete(key);
+          return next;
+        }).pipe(
+          Effect.tap(() =>
+            Effect.sync(() => {
+              client.ws.send(
+                JSON.stringify({
+                  id: request.value.id,
+                  error: {
+                    message: cause.message,
+                  },
+                } satisfies ProviderToolHostResponse),
+              );
+            }),
+          ),
+        ),
+      ),
+    );
+  });
+
   httpServer.on("upgrade", (request, socket, head) => {
     socket.on("error", () => {}); // Prevent unhandled `EPIPE`/`ECONNRESET` from crashing the process if the client disconnects mid-handshake
 
-    if (authToken) {
-      let providedToken: string | null = null;
+    const requestUrl = (() => {
       try {
-        const url = new URL(request.url ?? "/", `http://localhost:${port}`);
-        providedToken = url.searchParams.get("token");
+        return new URL(request.url ?? "/", `http://localhost:${port}`);
       } catch {
-        rejectUpgrade(socket, 400, "Invalid WebSocket URL");
+        return null;
+      }
+    })();
+    if (!requestUrl) {
+      rejectUpgrade(socket, 400, "Invalid WebSocket URL");
+      return;
+    }
+
+    if (requestUrl.pathname === PROVIDER_BRIDGE_WS_PATH) {
+      if (!providerBridgeSharedSecret) {
+        rejectUpgrade(socket, 404, "Provider bridge is disabled");
+        return;
+      }
+      const providedSecret = requestUrl.searchParams.get("secret");
+      if (providedSecret !== providerBridgeSharedSecret) {
+        rejectUpgrade(socket, 401, "Unauthorized provider bridge connection");
         return;
       }
 
+      providerBridgeWss.handleUpgrade(request, socket, head, (ws) => {
+        providerBridgeWss.emit("connection", ws, request);
+      });
+      return;
+    }
+
+    if (requestUrl.pathname === PROVIDER_TOOL_HOST_WS_PATH) {
+      const token = requestUrl.searchParams.get("token")?.trim();
+      if (!token) {
+        rejectUpgrade(socket, 401, "Unauthorized provider tool host connection");
+        return;
+      }
+
+      const resolvedThreadId = Effect.runSync(providerToolHost.resolveThreadId(token));
+      if (Option.isNone(resolvedThreadId)) {
+        rejectUpgrade(socket, 401, "Unauthorized provider tool host connection");
+        return;
+      }
+
+      const threadId = resolvedThreadId.value;
+      providerToolHostWss.handleUpgrade(request, socket, head, (ws) => {
+        const client = { ws, threadId };
+
+        ws.on("message", (raw) => {
+          void runPromise(handleProviderToolHostMessage(client, raw));
+        });
+
+        const cleanup = () => {
+          void runPromise(
+            flushPendingToolHostRequests({
+              predicate: (entry) => entry.ws === ws,
+            }),
+          );
+        };
+
+        ws.on("close", cleanup);
+        ws.on("error", cleanup);
+      });
+      return;
+    }
+
+    if (authToken) {
+      const providedToken = requestUrl.searchParams.get("token");
       if (providedToken !== authToken) {
         rejectUpgrade(socket, 401, "Unauthorized WebSocket connection");
         return;
@@ -977,6 +1443,40 @@ export const createServer = Effect.fn(function* (): Effect.fn.Return<
     wss.handleUpgrade(request, socket, head, (ws) => {
       wss.emit("connection", ws, request);
     });
+  });
+
+  providerBridgeWss.on("connection", (ws) => {
+    const client = { ws, threadIds: new Set<ThreadId>() };
+    void runPromise(Ref.update(providerBridgeClients, (clients) => clients.add(client)));
+
+    ws.on("message", (raw) => {
+      void runPromise(handleProviderBridgeMessage(client, raw));
+    });
+
+    const cleanup = () => {
+      void runPromise(
+        Ref.update(providerBridgeClients, (clients) => {
+          clients.delete(client);
+          return clients;
+        }),
+      );
+      void runPromise(
+        flushPendingToolHostRequests({
+          predicate: (entry) => client.threadIds.has(entry.threadId),
+          errorMessage:
+            "Remote provider bridge disconnected before the local workspace tool call completed.",
+        }),
+      );
+      for (const threadId of client.threadIds) {
+        void runPromise(
+          providerService.stopSession({ threadId }).pipe(Effect.ignore({ log: true })),
+        );
+      }
+      client.threadIds.clear();
+    };
+
+    ws.on("close", cleanup);
+    ws.on("error", cleanup);
   });
 
   wss.on("connection", (ws) => {

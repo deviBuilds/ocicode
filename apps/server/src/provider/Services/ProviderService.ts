@@ -23,6 +23,7 @@ import type {
   ProviderStopSessionInput,
   ThreadId,
   ProviderTurnStartResult,
+  TurnId,
 } from "@ocicode/contracts";
 import { ServiceMap } from "effect";
 import type { Effect, Stream } from "effect";
@@ -76,6 +77,20 @@ export interface ProviderServiceShape {
   readonly stopSession: (
     input: ProviderStopSessionInput,
   ) => Effect.Effect<void, ProviderServiceError>;
+
+  /**
+   * Read provider conversation state for one thread.
+   */
+  readonly readThread: (input: { readonly threadId: ThreadId }) => Effect.Effect<
+    {
+      readonly threadId: ThreadId;
+      readonly turns: ReadonlyArray<{
+        readonly id: TurnId;
+        readonly items: ReadonlyArray<unknown>;
+      }>;
+    },
+    ProviderServiceError
+  >;
 
   /**
    * List active provider sessions.

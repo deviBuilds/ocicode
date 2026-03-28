@@ -28,6 +28,7 @@ import {
   isCodexCliVersionSupported,
   parseCodexCliVersion,
 } from "./provider/codexCliVersion";
+import { buildWorkspaceProxyProcessConfig } from "./provider/workspaceProxy.ts";
 
 type PendingRequestKey = string;
 
@@ -73,6 +74,7 @@ interface CodexSessionContext {
   pendingUserInputs: Map<ApprovalRequestId, PendingUserInputRequest>;
   nextRequestId: number;
   stopping: boolean;
+  workspaceProxyMode?: "local-proxy";
 }
 
 interface JsonRpcError {
@@ -133,6 +135,11 @@ export interface CodexAppServerStartSessionInput {
   readonly resumeCursor?: unknown;
   readonly providerOptions?: ProviderSessionStartInput["providerOptions"];
   readonly runtimeMode: RuntimeMode;
+  readonly workspaceProxy?: {
+    readonly mode: "local-proxy";
+    readonly url: string;
+    readonly token: string;
+  };
 }
 
 export interface CodexThreadTurnSnapshot {
@@ -419,6 +426,7 @@ function buildCodexCollaborationMode(input: {
   readonly interactionMode?: "default" | "plan";
   readonly model?: string;
   readonly effort?: string;
+  readonly extraDeveloperInstructions?: string;
 }):
   | {
       mode: "default" | "plan";
@@ -438,12 +446,39 @@ function buildCodexCollaborationMode(input: {
     settings: {
       model,
       reasoning_effort: input.effort ?? "medium",
-      developer_instructions:
+      developer_instructions: [
         input.interactionMode === "plan"
           ? CODEX_PLAN_MODE_DEVELOPER_INSTRUCTIONS
           : CODEX_DEFAULT_MODE_DEVELOPER_INSTRUCTIONS,
+        input.extraDeveloperInstructions?.trim(),
+      ]
+        .filter((value): value is string => value !== undefined && value.length > 0)
+        .join("\n\n"),
     },
   };
+}
+
+function workspaceProxyDeveloperInstructions(
+  mode: CodexSessionContext["workspaceProxyMode"],
+): string | undefined {
+  if (mode !== "local-proxy") {
+    return undefined;
+  }
+  return [
+    "Remote provider mode is active.",
+    "Use the local workspace MCP tools for reading files, editing files, and running commands.",
+    "Do not rely on native filesystem or shell access on this machine; those approvals will be declined.",
+  ].join(" ");
+}
+
+function buildCodexWorkspaceProxyArgs(input: { readonly url: string }): string[] {
+  const proxy = buildWorkspaceProxyProcessConfig(input.url);
+  return [
+    "-c",
+    `mcp_servers.ocicode_local_workspace.command=${JSON.stringify(proxy.command)}`,
+    "-c",
+    `mcp_servers.ocicode_local_workspace.args=${JSON.stringify(proxy.args)}`,
+  ];
 }
 
 function toCodexUserInputAnswer(value: unknown): CodexUserInputAnswer {
@@ -544,12 +579,18 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
       const codexOptions = readCodexProviderOptions(input);
       const codexBinaryPath = codexOptions.binaryPath ?? "codex";
       const codexHomePath = codexOptions.homePath;
+      const codexSpawnArgs = [
+        "app-server",
+        ...(input.workspaceProxy
+          ? buildCodexWorkspaceProxyArgs({ url: input.workspaceProxy.url })
+          : []),
+      ];
       this.assertSupportedCodexCliVersion({
         binaryPath: codexBinaryPath,
         cwd: resolvedCwd,
         ...(codexHomePath ? { homePath: codexHomePath } : {}),
       });
-      const child = spawn(codexBinaryPath, ["app-server"], {
+      const child = spawn(codexBinaryPath, codexSpawnArgs, {
         cwd: resolvedCwd,
         env: {
           ...process.env,
@@ -574,6 +615,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
         pendingUserInputs: new Map(),
         nextRequestId: 1,
         stopping: false,
+        ...(input.workspaceProxy ? { workspaceProxyMode: input.workspaceProxy.mode } : {}),
       };
 
       this.sessions.set(threadId, context);
@@ -801,6 +843,14 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
       ...(input.interactionMode !== undefined ? { interactionMode: input.interactionMode } : {}),
       ...(normalizedModel !== undefined ? { model: normalizedModel } : {}),
       ...(input.effort !== undefined ? { effort: input.effort } : {}),
+      ...(context.workspaceProxyMode
+        ? (() => {
+            const extraDeveloperInstructions = workspaceProxyDeveloperInstructions(
+              context.workspaceProxyMode,
+            );
+            return extraDeveloperInstructions ? { extraDeveloperInstructions } : {};
+          })()
+        : {}),
     });
     if (collaborationMode) {
       if (!turnStartParams.model) {
@@ -1187,8 +1237,12 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
     const route = this.readRouteFields(request.params);
     const requestKind = this.requestKindForMethod(request.method);
     let requestId: ApprovalRequestId | undefined;
+    const shouldAutoDeclineForWorkspaceProxy =
+      requestKind !== undefined && context.workspaceProxyMode === "local-proxy";
     if (requestKind) {
       requestId = ApprovalRequestId.makeUnsafe(randomUUID());
+    }
+    if (requestKind && !shouldAutoDeclineForWorkspaceProxy && requestId) {
       const pendingRequest: PendingApprovalRequest = {
         requestId,
         jsonRpcId: request.id,
@@ -1230,6 +1284,35 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
       requestKind,
       payload: request.params,
     });
+
+    if (requestKind && shouldAutoDeclineForWorkspaceProxy) {
+      this.writeMessage(context, {
+        id: request.id,
+        result: {
+          decision: "decline",
+        },
+      });
+      this.emitEvent({
+        id: EventId.makeUnsafe(randomUUID()),
+        kind: "notification",
+        provider: "codex",
+        threadId: context.session.threadId,
+        createdAt: new Date().toISOString(),
+        method: "item/requestApproval/decision",
+        turnId: route.turnId,
+        itemId: route.itemId,
+        requestId,
+        requestKind,
+        payload: {
+          requestId,
+          requestKind,
+          decision: "decline",
+          reason:
+            "Remote local-proxy mode is enabled. Native remote filesystem and command access is disabled.",
+        },
+      });
+      return;
+    }
 
     if (requestKind) {
       return;

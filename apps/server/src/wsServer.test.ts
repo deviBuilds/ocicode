@@ -44,6 +44,7 @@ import { makeSqlitePersistenceLive, SqlitePersistenceMemory } from "./persistenc
 import { SqlClient, SqlError } from "effect/unstable/sql";
 import { ProviderService, type ProviderServiceShape } from "./provider/Services/ProviderService";
 import { ProviderHealth, type ProviderHealthShape } from "./provider/Services/ProviderHealth";
+import { ProviderToolHostLive } from "./provider/Layers/ProviderToolHost.ts";
 import { Open, type OpenShape } from "./open";
 import { GitManager, type GitManagerShape } from "./git/Services/GitManager.ts";
 import type { GitCoreShape } from "./git/Services/GitCore.ts";
@@ -77,9 +78,21 @@ const defaultProviderStatuses: ReadonlyArray<ServerProviderStatus> = [
     checkedAt: "2026-01-01T00:00:00.000Z",
   },
 ];
+const defaultFeatureFlags = {
+  claudeBuildEnabled: false,
+  remoteProviderModeBuildEnabled: true,
+} as const;
 
 const defaultProviderHealthService: ProviderHealthShape = {
   getStatuses: Effect.succeed(defaultProviderStatuses),
+  checkStatus: () =>
+    Effect.succeed({
+      provider: "codex",
+      status: "ready",
+      available: true,
+      authStatus: "authenticated",
+      checkedAt: "2026-01-01T00:00:00.000Z",
+    }),
 };
 
 class MockTerminalManager implements TerminalManagerShape {
@@ -404,7 +417,10 @@ describe("WebSocket Server", () => {
     const stateDir = options.stateDir ?? makeTempDir("ocicode-ws-state-");
     const scope = await Effect.runPromise(Scope.make("sequential"));
     const persistenceLayer = options.persistenceLayer ?? SqlitePersistenceMemory;
-    const providerLayer = options.providerLayer ?? makeServerProviderLayer();
+    const providerLayer = Layer.merge(
+      options.providerLayer ?? makeServerProviderLayer(),
+      ProviderToolHostLive,
+    );
     const providerHealthLayer = Layer.succeed(
       ProviderHealth,
       options.providerHealth ?? defaultProviderHealthService,
@@ -415,6 +431,9 @@ describe("WebSocket Server", () => {
       port: 0,
       host: undefined,
       cwd: options.cwd ?? "/test/project",
+      enableClaudeProvider: false,
+      enableRemoteProviderMode: true,
+      providerBridgeSharedSecret: undefined,
       keybindingsConfigPath: path.join(stateDir, "keybindings.json"),
       stateDir,
       staticDir: options.staticDir,
@@ -755,6 +774,7 @@ describe("WebSocket Server", () => {
       issues: [],
       providers: defaultProviderStatuses,
       availableEditors: expect.any(Array),
+      featureFlags: defaultFeatureFlags,
     });
     expectAvailableEditors((response.result as { availableEditors: unknown }).availableEditors);
   });
@@ -781,6 +801,7 @@ describe("WebSocket Server", () => {
       issues: [],
       providers: defaultProviderStatuses,
       availableEditors: expect.any(Array),
+      featureFlags: defaultFeatureFlags,
     });
     expectAvailableEditors((response.result as { availableEditors: unknown }).availableEditors);
 
@@ -817,6 +838,7 @@ describe("WebSocket Server", () => {
       ],
       providers: defaultProviderStatuses,
       availableEditors: expect.any(Array),
+      featureFlags: defaultFeatureFlags,
     });
     expectAvailableEditors((response.result as { availableEditors: unknown }).availableEditors);
     expect(fs.readFileSync(keybindingsPath, "utf8")).toBe("{ not-json");
@@ -900,6 +922,7 @@ describe("WebSocket Server", () => {
     expect(malformedPush.data).toEqual({
       issues: [{ kind: "keybindings.malformed-config", message: expect.any(String) }],
       providers: defaultProviderStatuses,
+      featureFlags: defaultFeatureFlags,
     });
 
     fs.writeFileSync(keybindingsPath, "[]", "utf8");
@@ -910,7 +933,11 @@ describe("WebSocket Server", () => {
         Array.isArray((push.data as { issues?: unknown[] }).issues) &&
         (push.data as { issues: unknown[] }).issues.length === 0,
     );
-    expect(successPush.data).toEqual({ issues: [], providers: defaultProviderStatuses });
+    expect(successPush.data).toEqual({
+      issues: [],
+      providers: defaultProviderStatuses,
+      featureFlags: defaultFeatureFlags,
+    });
   });
 
   it("routes shell.openInEditor through the injected open service", async () => {
@@ -972,6 +999,7 @@ describe("WebSocket Server", () => {
       issues: [],
       providers: defaultProviderStatuses,
       availableEditors: expect.any(Array),
+      featureFlags: defaultFeatureFlags,
     });
     expectAvailableEditors((response.result as { availableEditors: unknown }).availableEditors);
   });
@@ -1020,6 +1048,7 @@ describe("WebSocket Server", () => {
       issues: [],
       providers: defaultProviderStatuses,
       availableEditors: expect.any(Array),
+      featureFlags: defaultFeatureFlags,
     });
     expectAvailableEditors(
       (configResponse.result as { availableEditors: unknown }).availableEditors,
@@ -1167,6 +1196,7 @@ describe("WebSocket Server", () => {
       respondToRequest: () => unsupported(),
       respondToUserInput: () => unsupported(),
       stopSession: () => unsupported(),
+      readThread: ({ threadId }) => Effect.succeed({ threadId, turns: [] }),
       listSessions: () => Effect.succeed([]),
       getCapabilities: () => Effect.succeed({ sessionModelSwitch: "in-session" }),
       rollbackConversation: () => unsupported(),

@@ -388,6 +388,16 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
         yield* directory.remove(input.threadId);
       });
 
+    const readThread: ProviderServiceShape["readThread"] = (input) =>
+      Effect.gen(function* () {
+        const routed = yield* resolveRoutableSession({
+          threadId: input.threadId,
+          operation: "ProviderService.readThread",
+          allowRecovery: true,
+        });
+        return yield* routed.adapter.readThread(routed.threadId);
+      });
+
     const listSessions: ProviderServiceShape["listSessions"] = () =>
       Effect.gen(function* () {
         const sessionsByProvider = yield* Effect.forEach(adapters, (adapter) =>
@@ -491,6 +501,7 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
       respondToRequest,
       respondToUserInput,
       stopSession,
+      readThread,
       listSessions,
       getCapabilities,
       rollbackConversation,

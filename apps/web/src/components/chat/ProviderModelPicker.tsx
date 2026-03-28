@@ -3,7 +3,7 @@ import { normalizeModelSlug } from "@ocicode/shared/model";
 import { memo, useState } from "react";
 import { ChevronDownIcon } from "lucide-react";
 
-import { type Icon, OpenAI } from "../Icons";
+import { Claude, type Icon, OpenAI } from "../Icons";
 import { Button } from "../ui/button";
 import {
   Menu,
@@ -17,10 +17,11 @@ import {
   MenuTrigger,
 } from "../ui/menu";
 import { cn } from "~/lib/utils";
-import { PROVIDER_OPTIONS } from "~/session-logic";
 
-const AVAILABLE_PROVIDER_OPTIONS = PROVIDER_OPTIONS.filter((option) => option.available);
-const PROVIDER_ICON_BY_PROVIDER: Record<ProviderKind, Icon> = { codex: OpenAI };
+const PROVIDER_ICON_BY_PROVIDER: Record<ProviderKind, Icon> = {
+  codex: OpenAI,
+  claudeAgent: Claude,
+};
 
 function resolveModelForProviderPicker(
   provider: ProviderKind,
@@ -47,6 +48,10 @@ export const ProviderModelPicker = memo(function ProviderModelPicker(props: {
   provider: ProviderKind;
   model: ModelSlug;
   lockedProvider: ProviderKind | null;
+  availableProviders: ReadonlyArray<{
+    value: ProviderKind;
+    label: string;
+  }>;
   modelOptionsByProvider: Record<ProviderKind, ReadonlyArray<{ slug: string; name: string }>>;
   compact?: boolean;
   disabled?: boolean;
@@ -94,7 +99,7 @@ export const ProviderModelPicker = memo(function ProviderModelPicker(props: {
         </span>
       </MenuTrigger>
       <MenuPopup align="start">
-        {AVAILABLE_PROVIDER_OPTIONS.map((option) => {
+        {props.availableProviders.map((option) => {
           const OptionIcon = PROVIDER_ICON_BY_PROVIDER[option.value];
           const isDisabledByProviderLock =
             props.lockedProvider !== null && props.lockedProvider !== option.value;

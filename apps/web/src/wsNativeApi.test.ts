@@ -74,6 +74,10 @@ const defaultProviders: ReadonlyArray<ServerProviderStatus> = [
     checkedAt: "2026-01-01T00:00:00.000Z",
   },
 ];
+const defaultFeatureFlags = {
+  claudeBuildEnabled: false,
+  remoteProviderModeBuildEnabled: true,
+} as const;
 
 beforeEach(() => {
   vi.resetModules();
@@ -176,6 +180,7 @@ describe("wsNativeApi", () => {
         },
       ],
       providers: defaultProviders,
+      featureFlags: defaultFeatureFlags,
     } as const;
     emitPush(WS_CHANNELS.serverConfigUpdated, payload);
 
@@ -204,12 +209,14 @@ describe("wsNativeApi", () => {
     emitPush(WS_CHANNELS.serverConfigUpdated, {
       issues: [{ kind: "keybindings.malformed-config", message: "bad json" }],
       providers: defaultProviders,
+      featureFlags: defaultFeatureFlags,
     });
 
     expect(listener).toHaveBeenCalledTimes(1);
     expect(listener).toHaveBeenCalledWith({
       issues: [{ kind: "keybindings.malformed-config", message: "bad json" }],
       providers: defaultProviders,
+      featureFlags: defaultFeatureFlags,
     });
     expect(warnSpy).toHaveBeenCalledTimes(1);
   });

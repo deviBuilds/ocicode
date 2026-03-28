@@ -20,6 +20,9 @@ export interface ServerConfigShape {
   readonly port: number;
   readonly host: string | undefined;
   readonly cwd: string;
+  readonly enableClaudeProvider: boolean;
+  readonly enableRemoteProviderMode: boolean;
+  readonly providerBridgeSharedSecret: string | undefined;
   readonly keybindingsConfigPath: string;
   readonly stateDir: string;
   readonly staticDir: string | undefined;
@@ -45,6 +48,9 @@ export class ServerConfig extends ServiceMap.Service<ServerConfig, ServerConfigS
           cwd,
           stateDir: statedir,
           mode: "web",
+          enableClaudeProvider: false,
+          enableRemoteProviderMode: true,
+          providerBridgeSharedSecret: undefined,
           autoBootstrapProjectFromCwd: false,
           logWebSocketEvents: false,
           port: 0,

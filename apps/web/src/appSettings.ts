@@ -1,6 +1,11 @@
 import { useCallback, useSyncExternalStore } from "react";
 import { Option, Schema } from "effect";
-import { type ProviderKind } from "@ocicode/contracts";
+import {
+  type ProviderBridgeHealthInput,
+  type ProviderExecutionMode,
+  type ProviderKind,
+  type ProviderStartOptions,
+} from "@ocicode/contracts";
 import { makeStorageKey } from "@ocicode/shared/branding";
 import { getDefaultModel, getModelOptions, normalizeModelSlug } from "@ocicode/shared/model";
 import { TIMESTAMP_FORMAT_VALUES } from "./timestampFormat";
@@ -15,13 +20,29 @@ export const SIDEBAR_THREAD_SORT_ORDER_VALUES = ["updated_at", "created_at"] as 
 export type SidebarThreadSortOrder = (typeof SIDEBAR_THREAD_SORT_ORDER_VALUES)[number];
 const BUILT_IN_MODEL_SLUGS_BY_PROVIDER: Record<ProviderKind, ReadonlySet<string>> = {
   codex: new Set(getModelOptions("codex").map((option) => option.slug)),
+  claudeAgent: new Set(getModelOptions("claudeAgent").map((option) => option.slug)),
 };
 
 const AppSettingsSchema = Schema.Struct({
+  codexMode: Schema.Literals(["disabled", "local", "remote"]).pipe(
+    Schema.withConstructorDefault(() => Option.some("local")),
+  ),
   codexBinaryPath: Schema.String.check(Schema.isMaxLength(4096)).pipe(
     Schema.withConstructorDefault(() => Option.some("")),
   ),
   codexHomePath: Schema.String.check(Schema.isMaxLength(4096)).pipe(
+    Schema.withConstructorDefault(() => Option.some("")),
+  ),
+  claudeMode: Schema.Literals(["disabled", "local", "remote"]).pipe(
+    Schema.withConstructorDefault(() => Option.some("disabled")),
+  ),
+  claudeBinaryPath: Schema.String.check(Schema.isMaxLength(4096)).pipe(
+    Schema.withConstructorDefault(() => Option.some("")),
+  ),
+  remoteBridgeUrl: Schema.String.check(Schema.isMaxLength(4096)).pipe(
+    Schema.withConstructorDefault(() => Option.some("")),
+  ),
+  remoteBridgeSharedSecret: Schema.String.check(Schema.isMaxLength(4096)).pipe(
     Schema.withConstructorDefault(() => Option.some("")),
   ),
   confirmThreadDelete: Schema.Boolean.pipe(Schema.withConstructorDefault(() => Option.some(true))),
@@ -41,6 +62,9 @@ const AppSettingsSchema = Schema.Struct({
     Schema.withConstructorDefault(() => Option.some("locale")),
   ),
   customCodexModels: Schema.Array(Schema.String).pipe(
+    Schema.withConstructorDefault(() => Option.some([])),
+  ),
+  customClaudeModels: Schema.Array(Schema.String).pipe(
     Schema.withConstructorDefault(() => Option.some([])),
   ),
 });
@@ -90,6 +114,93 @@ function normalizeAppSettings(settings: AppSettings): AppSettings {
   return {
     ...settings,
     customCodexModels: normalizeCustomModelSlugs(settings.customCodexModels, "codex"),
+    customClaudeModels: normalizeCustomModelSlugs(settings.customClaudeModels, "claudeAgent"),
+  };
+}
+
+export function getProviderExecutionMode(
+  settings: Pick<AppSettings, "codexMode" | "claudeMode">,
+  provider: ProviderKind,
+): ProviderExecutionMode {
+  return provider === "codex" ? settings.codexMode : settings.claudeMode;
+}
+
+export function getCustomModelsForProvider(
+  settings: Pick<AppSettings, "customCodexModels" | "customClaudeModels">,
+  provider: ProviderKind,
+): readonly string[] {
+  return provider === "codex" ? settings.customCodexModels : settings.customClaudeModels;
+}
+
+export function buildProviderStartOptionsForProvider(
+  settings: Pick<
+    AppSettings,
+    | "codexMode"
+    | "codexBinaryPath"
+    | "codexHomePath"
+    | "claudeMode"
+    | "claudeBinaryPath"
+    | "remoteBridgeUrl"
+    | "remoteBridgeSharedSecret"
+  >,
+  provider: ProviderKind,
+): ProviderStartOptions | undefined {
+  const executionMode = getProviderExecutionMode(settings, provider);
+  const remoteConfig =
+    executionMode === "remote" ||
+    settings.remoteBridgeUrl.trim().length > 0 ||
+    settings.remoteBridgeSharedSecret.trim().length > 0
+      ? {
+          ...(settings.remoteBridgeUrl.trim().length > 0
+            ? { baseUrl: settings.remoteBridgeUrl.trim() }
+            : {}),
+          ...(settings.remoteBridgeSharedSecret.trim().length > 0
+            ? { sharedSecret: settings.remoteBridgeSharedSecret.trim() }
+            : {}),
+          workspaceProxyMode: "local-proxy" as const,
+        }
+      : undefined;
+
+  if (provider === "codex") {
+    const codexOptions = {
+      executionMode,
+      ...(settings.codexBinaryPath.trim().length > 0
+        ? { binaryPath: settings.codexBinaryPath.trim() }
+        : {}),
+      ...(settings.codexHomePath.trim().length > 0
+        ? { homePath: settings.codexHomePath.trim() }
+        : {}),
+      ...(remoteConfig ? { remote: remoteConfig } : {}),
+    };
+    return { codex: codexOptions };
+  }
+
+  const claudeOptions = {
+    executionMode,
+    ...(settings.claudeBinaryPath.trim().length > 0
+      ? { binaryPath: settings.claudeBinaryPath.trim() }
+      : {}),
+    ...(remoteConfig ? { remote: remoteConfig } : {}),
+  };
+  return { claudeAgent: claudeOptions };
+}
+
+export function buildProviderHealthInput(
+  settings: Pick<
+    AppSettings,
+    | "codexMode"
+    | "codexBinaryPath"
+    | "codexHomePath"
+    | "claudeMode"
+    | "claudeBinaryPath"
+    | "remoteBridgeUrl"
+    | "remoteBridgeSharedSecret"
+  >,
+  provider: ProviderKind,
+): ProviderBridgeHealthInput {
+  return {
+    provider,
+    providerOptions: buildProviderStartOptionsForProvider(settings, provider),
   };
 }
 

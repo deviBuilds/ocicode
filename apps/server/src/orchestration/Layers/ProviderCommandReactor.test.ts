@@ -188,6 +188,7 @@ describe("ProviderCommandReactor", () => {
       respondToRequest: respondToRequest as ProviderServiceShape["respondToRequest"],
       respondToUserInput: respondToUserInput as ProviderServiceShape["respondToUserInput"],
       stopSession: stopSession as ProviderServiceShape["stopSession"],
+      readThread: ({ threadId }) => Effect.succeed({ threadId, turns: [] }),
       listSessions: () => Effect.succeed(runtimeSessions),
       getCapabilities: (provider) =>
         Effect.succeed({

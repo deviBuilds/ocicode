@@ -107,6 +107,10 @@ function createBaseServerConfig(): ServerConfig {
       },
     ],
     availableEditors: [],
+    featureFlags: {
+      claudeBuildEnabled: false,
+      remoteProviderModeBuildEnabled: true,
+    },
   };
 }
 

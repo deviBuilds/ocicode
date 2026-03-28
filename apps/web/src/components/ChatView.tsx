@@ -15,6 +15,7 @@ import {
   type ProviderApprovalDecision,
   type ServerProviderStatus,
   type ProviderKind,
+  type ServerFeatureFlags,
   type ThreadId,
   type TurnId,
   OrchestrationThreadActivity,
@@ -25,7 +26,6 @@ import { makeStorageKey, WORKTREE_BRANCH_PREFIX } from "@ocicode/shared/branding
 import {
   getDefaultModel,
   getDefaultReasoningEffort,
-  getReasoningEffortOptions,
   normalizeModelSlug,
   resolveModelSlugForProvider,
 } from "@ocicode/shared/model";
@@ -44,7 +44,11 @@ import { useDebouncedValue } from "@tanstack/react-pacer";
 import { useNavigate, useSearch } from "@tanstack/react-router";
 import { gitBranchesQueryOptions, gitCreateWorktreeMutationOptions } from "~/lib/gitReactQuery";
 import { projectSearchEntriesQueryOptions } from "~/lib/projectReactQuery";
-import { serverConfigQueryOptions, serverQueryKeys } from "~/lib/serverReactQuery";
+import {
+  serverConfigQueryOptions,
+  serverProviderHealthQueryOptions,
+  serverQueryKeys,
+} from "~/lib/serverReactQuery";
 
 import { isElectron } from "../env";
 import { parseDiffRouteSearch, stripDiffSearchParams } from "../diffRouteSearch";
@@ -164,7 +168,15 @@ import {
 } from "~/projectScripts";
 import { newCommandId, newMessageId, newThreadId } from "~/lib/utils";
 import { readNativeApi } from "~/nativeApi";
-import { getAppModelOptions, resolveAppModelSelection, useAppSettings } from "../appSettings";
+import {
+  buildProviderHealthInput,
+  buildProviderStartOptionsForProvider,
+  getAppModelOptions,
+  getCustomModelsForProvider,
+  getProviderExecutionMode,
+  resolveAppModelSelection,
+  useAppSettings,
+} from "../appSettings";
 import { type TimestampFormat } from "../timestampFormat";
 import {
   type ComposerImageAttachment,
@@ -189,18 +201,27 @@ const EMPTY_KEYBINDINGS: ResolvedKeybindingsConfig = [];
 const EMPTY_PROJECT_ENTRIES: ProjectEntry[] = [];
 const EMPTY_AVAILABLE_EDITORS: EditorId[] = [];
 const EMPTY_PROVIDER_STATUSES: ServerProviderStatus[] = [];
+const DEFAULT_SERVER_FEATURE_FLAGS: ServerFeatureFlags = {
+  claudeBuildEnabled: false,
+  remoteProviderModeBuildEnabled: false,
+};
 const EMPTY_PENDING_USER_INPUT_ANSWERS: Record<string, PendingUserInputDraftAnswer> = {};
 const COMPOSER_PATH_QUERY_DEBOUNCE_MS = 120;
 const SCRIPT_TERMINAL_COLS = 120;
 const SCRIPT_TERMINAL_ROWS = 30;
-const AVAILABLE_PROVIDER_OPTIONS = PROVIDER_OPTIONS.filter((option) => option.available);
 
 function getCustomModelOptionsByProvider(settings: {
   customCodexModels: readonly string[];
+  customClaudeModels: readonly string[];
 }): Record<ProviderKind, ReadonlyArray<{ slug: string; name: string }>> {
   return {
     codex: getAppModelOptions("codex", settings.customCodexModels),
+    claudeAgent: getAppModelOptions("claudeAgent", settings.customClaudeModels),
   };
+}
+
+function isProviderBuildEnabled(provider: ProviderKind, featureFlags: ServerFeatureFlags): boolean {
+  return provider === "codex" ? true : featureFlags.claudeBuildEnabled;
 }
 
 function readLastInvokedScriptByProjectFromStorage(): Record<string, string> {
@@ -494,6 +515,7 @@ export default function ChatView({ threadId }: ChatViewProps) {
   const setStoreThreadError = useStore((store) => store.setError);
   const setStoreThreadBranch = useStore((store) => store.setThreadBranch);
   const { settings } = useAppSettings();
+  const serverConfigQuery = useQuery(serverConfigQueryOptions());
   const timestampFormat: TimestampFormat = settings.timestampFormat;
   const navigate = useNavigate();
   const rawSearch = useSearch({
@@ -728,15 +750,31 @@ export default function ChatView({ threadId }: ChatViewProps) {
       activeThread.messages.length > 0 ||
       activeThread.session !== null),
   );
+  const serverFeatureFlags = serverConfigQuery.data?.featureFlags ?? DEFAULT_SERVER_FEATURE_FLAGS;
+  const availableProviderOptions = useMemo(
+    () =>
+      PROVIDER_OPTIONS.filter(
+        (option) =>
+          option.available &&
+          isProviderBuildEnabled(option.value, serverFeatureFlags) &&
+          getProviderExecutionMode(settings, option.value) !== "disabled",
+      ),
+    [serverFeatureFlags, settings],
+  );
   const lockedProvider: ProviderKind | null = hasThreadStarted
     ? (sessionProvider ?? selectedProviderByThreadId ?? null)
     : null;
-  const selectedProvider: ProviderKind = lockedProvider ?? selectedProviderByThreadId ?? "codex";
+  const selectedProvider: ProviderKind =
+    lockedProvider ??
+    (selectedProviderByThreadId &&
+    availableProviderOptions.some((option) => option.value === selectedProviderByThreadId)
+      ? selectedProviderByThreadId
+      : (availableProviderOptions[0]?.value ?? "codex"));
   const baseThreadModel = resolveModelSlugForProvider(
     selectedProvider,
     activeThread?.model ?? activeProject?.model ?? getDefaultModel(selectedProvider),
   );
-  const customModelsForSelectedProvider = settings.customCodexModels;
+  const customModelsForSelectedProvider = getCustomModelsForProvider(settings, selectedProvider);
   const selectedModel = useMemo(() => {
     const draftModel = composerDraft.model;
     if (!draftModel) {
@@ -748,9 +786,14 @@ export default function ChatView({ threadId }: ChatViewProps) {
       draftModel,
     ) as ModelSlug;
   }, [baseThreadModel, composerDraft.model, customModelsForSelectedProvider, selectedProvider]);
-  const reasoningOptions = getReasoningEffortOptions(selectedProvider);
-  const supportsReasoningEffort = reasoningOptions.length > 0;
-  const selectedEffort = composerDraft.effort ?? getDefaultReasoningEffort(selectedProvider);
+  const reasoningOptions = useMemo(
+    () => (selectedProvider === "codex" ? (["low", "medium", "high", "xhigh"] as const) : []),
+    [selectedProvider],
+  );
+  const selectedEffort =
+    selectedProvider === "codex"
+      ? (composerDraft.effort ?? getDefaultReasoningEffort("codex"))
+      : null;
   const selectedCodexFastModeEnabled =
     selectedProvider === "codex" ? composerDraft.codexFastMode : false;
   const selectedModelOptionsForDispatch = useMemo(() => {
@@ -758,22 +801,14 @@ export default function ChatView({ threadId }: ChatViewProps) {
       return undefined;
     }
     const codexOptions = {
-      ...(supportsReasoningEffort && selectedEffort ? { reasoningEffort: selectedEffort } : {}),
+      ...(selectedEffort ? { reasoningEffort: selectedEffort } : {}),
       ...(selectedCodexFastModeEnabled ? { fastMode: true } : {}),
     };
     return Object.keys(codexOptions).length > 0 ? { codex: codexOptions } : undefined;
-  }, [selectedCodexFastModeEnabled, selectedEffort, selectedProvider, supportsReasoningEffort]);
+  }, [selectedCodexFastModeEnabled, selectedEffort, selectedProvider]);
   const providerOptionsForDispatch = useMemo(() => {
-    if (!settings.codexBinaryPath && !settings.codexHomePath) {
-      return undefined;
-    }
-    return {
-      codex: {
-        ...(settings.codexBinaryPath ? { binaryPath: settings.codexBinaryPath } : {}),
-        ...(settings.codexHomePath ? { homePath: settings.codexHomePath } : {}),
-      },
-    };
-  }, [settings.codexBinaryPath, settings.codexHomePath]);
+    return buildProviderStartOptionsForProvider(settings, selectedProvider);
+  }, [selectedProvider, settings]);
   const selectedModelForPicker = selectedModel;
   const modelOptionsByProvider = useMemo(
     () => getCustomModelOptionsByProvider(settings),
@@ -787,20 +822,20 @@ export default function ChatView({ threadId }: ChatViewProps) {
   }, [modelOptionsByProvider, selectedModelForPicker, selectedProvider]);
   const searchableModelOptions = useMemo(
     () =>
-      AVAILABLE_PROVIDER_OPTIONS.filter(
-        (option) => lockedProvider === null || option.value === lockedProvider,
-      ).flatMap((option) =>
-        modelOptionsByProvider[option.value].map(({ slug, name }) => ({
-          provider: option.value,
-          providerLabel: option.label,
-          slug,
-          name,
-          searchSlug: slug.toLowerCase(),
-          searchName: name.toLowerCase(),
-          searchProvider: option.label.toLowerCase(),
-        })),
-      ),
-    [lockedProvider, modelOptionsByProvider],
+      availableProviderOptions
+        .filter((option) => lockedProvider === null || option.value === lockedProvider)
+        .flatMap((option) =>
+          modelOptionsByProvider[option.value].map(({ slug, name }) => ({
+            provider: option.value,
+            providerLabel: option.label,
+            slug,
+            name,
+            searchSlug: slug.toLowerCase(),
+            searchName: name.toLowerCase(),
+            searchProvider: option.label.toLowerCase(),
+          })),
+        ),
+    [availableProviderOptions, lockedProvider, modelOptionsByProvider],
   );
   const phase = derivePhase(activeThread?.session ?? null);
   const isSendBusy = sendPhase !== "idle";
@@ -1125,7 +1160,6 @@ export default function ChatView({ threadId }: ChatViewProps) {
   );
   const effectivePathQuery = pathTriggerQuery.length > 0 ? debouncedPathQuery : "";
   const branchesQuery = useQuery(gitBranchesQueryOptions(gitCwd));
-  const serverConfigQuery = useQuery(serverConfigQueryOptions());
   const workspaceEntriesQuery = useQuery(
     projectSearchEntriesQueryOptions({
       cwd: gitCwd,
@@ -1209,6 +1243,9 @@ export default function ChatView({ threadId }: ChatViewProps) {
   composerMenuOpenRef.current = composerMenuOpen;
   composerMenuItemsRef.current = composerMenuItems;
   activeComposerMenuItemRef.current = activeComposerMenuItem;
+  const currentProviderHealthQuery = useQuery(
+    serverProviderHealthQueryOptions(buildProviderHealthInput(settings, selectedProvider)),
+  );
   const nonPersistedComposerImageIdSet = useMemo(
     () => new Set(nonPersistedComposerImageIds),
     [nonPersistedComposerImageIds],
@@ -1216,11 +1253,19 @@ export default function ChatView({ threadId }: ChatViewProps) {
   const keybindings = serverConfigQuery.data?.keybindings ?? EMPTY_KEYBINDINGS;
   const availableEditors = serverConfigQuery.data?.availableEditors ?? EMPTY_AVAILABLE_EDITORS;
   const providerStatuses = serverConfigQuery.data?.providers ?? EMPTY_PROVIDER_STATUSES;
-  const activeProvider = activeThread?.session?.provider ?? "codex";
   const activeProviderStatus = useMemo(
-    () => providerStatuses.find((status) => status.provider === activeProvider) ?? null,
-    [activeProvider, providerStatuses],
+    () =>
+      currentProviderHealthQuery.data ??
+      providerStatuses.find((status) => status.provider === selectedProvider) ??
+      null,
+    [currentProviderHealthQuery.data, providerStatuses, selectedProvider],
   );
+  const providerUnavailableMessage =
+    activeProviderStatus &&
+    (!activeProviderStatus.available || activeProviderStatus.status === "error")
+      ? (activeProviderStatus.message ??
+        `${selectedProvider === "codex" ? "Codex" : "Claude"} provider is unavailable.`)
+      : null;
   const activeProjectCwd = activeProject?.cwd ?? null;
   const activeThreadWorktreePath = activeThread?.worktreePath ?? null;
   const threadTerminalRuntimeEnv = useMemo(() => {
@@ -2460,6 +2505,10 @@ export default function ChatView({ threadId }: ChatViewProps) {
     e?.preventDefault();
     const api = readNativeApi();
     if (!api || !activeThread || isSendBusy || isConnecting || sendInFlightRef.current) return;
+    if (providerUnavailableMessage) {
+      setStoreThreadError(activeThread.id, providerUnavailableMessage);
+      return;
+    }
     if (activePendingProgress) {
       onAdvanceActivePendingUserInput();
       return;
@@ -2960,6 +3009,11 @@ export default function ChatView({ threadId }: ChatViewProps) {
         return;
       }
 
+      if (providerUnavailableMessage) {
+        setStoreThreadError(activeThread.id, providerUnavailableMessage);
+        return;
+      }
+
       const trimmed = text.trim();
       if (!trimmed) {
         return;
@@ -3047,6 +3101,7 @@ export default function ChatView({ threadId }: ChatViewProps) {
       isSendBusy,
       isServerThread,
       persistThreadSettingsForNextTurn,
+      providerUnavailableMessage,
       resetSendPhase,
       runtimeMode,
       selectedModel,
@@ -3054,6 +3109,7 @@ export default function ChatView({ threadId }: ChatViewProps) {
       providerOptionsForDispatch,
       selectedProvider,
       setComposerDraftInteractionMode,
+      setStoreThreadError,
       setThreadError,
       settings.enableAssistantStreaming,
     ],
@@ -3071,6 +3127,11 @@ export default function ChatView({ threadId }: ChatViewProps) {
       isConnecting ||
       sendInFlightRef.current
     ) {
+      return;
+    }
+
+    if (providerUnavailableMessage) {
+      setStoreThreadError(activeThread.id, providerUnavailableMessage);
       return;
     }
 
@@ -3170,12 +3231,14 @@ export default function ChatView({ threadId }: ChatViewProps) {
     isSendBusy,
     isServerThread,
     navigate,
+    providerUnavailableMessage,
     resetSendPhase,
     runtimeMode,
     selectedModel,
     selectedModelOptionsForDispatch,
     providerOptionsForDispatch,
     selectedProvider,
+    setStoreThreadError,
     settings.enableAssistantStreaming,
     syncServerReadModel,
   ]);
@@ -3190,7 +3253,7 @@ export default function ChatView({ threadId }: ChatViewProps) {
       setComposerDraftProvider(activeThread.id, provider);
       setComposerDraftModel(
         activeThread.id,
-        resolveAppModelSelection(provider, settings.customCodexModels, model),
+        resolveAppModelSelection(provider, getCustomModelsForProvider(settings, provider), model),
       );
       scheduleComposerFocus();
     },
@@ -3200,7 +3263,7 @@ export default function ChatView({ threadId }: ChatViewProps) {
       scheduleComposerFocus,
       setComposerDraftModel,
       setComposerDraftProvider,
-      settings.customCodexModels,
+      settings,
     ],
   );
   const onEffortSelect = useCallback(
@@ -3804,6 +3867,7 @@ export default function ChatView({ threadId }: ChatViewProps) {
                           provider={selectedProvider}
                           model={selectedModelForPickerWithCustomFallback}
                           lockedProvider={lockedProvider}
+                          availableProviders={availableProviderOptions}
                           modelOptionsByProvider={modelOptionsByProvider}
                           onProviderModelChange={onProviderModelSelect}
                         />

@@ -777,7 +777,10 @@ describe("deriveActiveWorkStartedAt", () => {
 });
 
 describe("PROVIDER_OPTIONS", () => {
-  it("keeps the provider picker Codex-only", () => {
-    expect(PROVIDER_OPTIONS).toEqual([{ value: "codex", label: "Codex", available: true }]);
+  it("includes both Codex and Claude in the provider picker model", () => {
+    expect(PROVIDER_OPTIONS).toEqual([
+      { value: "codex", label: "Codex", available: true },
+      { value: "claudeAgent", label: "Claude", available: true },
+    ]);
   });
 });

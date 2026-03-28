@@ -21,6 +21,7 @@ import type {
   ProjectWriteFileResult,
 } from "./project";
 import type { ServerConfig } from "./server";
+import type { ProviderBridgeHealthInput, ProviderBridgeHealthResult } from "./providerBridge";
 import type {
   TerminalClearInput,
   TerminalCloseInput,
@@ -148,6 +149,7 @@ export interface NativeApi {
   };
   server: {
     getConfig: () => Promise<ServerConfig>;
+    checkProviderHealth: (input: ProviderBridgeHealthInput) => Promise<ProviderBridgeHealthResult>;
     upsertKeybinding: (input: ServerUpsertKeybindingInput) => Promise<ServerUpsertKeybindingResult>;
   };
   orchestration: {

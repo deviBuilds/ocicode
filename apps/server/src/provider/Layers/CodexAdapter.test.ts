@@ -24,6 +24,7 @@ import {
 import { ServerConfig } from "../../config.ts";
 import { CodexAdapter } from "../Services/CodexAdapter.ts";
 import { ProviderSessionDirectory } from "../Services/ProviderSessionDirectory.ts";
+import { ProviderToolHostLive } from "./ProviderToolHost.ts";
 import { makeCodexAdapterLive } from "./CodexAdapter.ts";
 
 const asThreadId = (value: string): ThreadId => ThreadId.makeUnsafe(value);
@@ -151,6 +152,7 @@ const validationLayer = it.layer(
   makeCodexAdapterLive({ manager: validationManager }).pipe(
     Layer.provideMerge(ServerConfig.layerTest(process.cwd(), process.cwd())),
     Layer.provideMerge(providerSessionDirectoryTestLayer),
+    Layer.provideMerge(ProviderToolHostLive),
     Layer.provideMerge(NodeServices.layer),
   ),
 );
@@ -192,6 +194,7 @@ const sessionErrorLayer = it.layer(
   makeCodexAdapterLive({ manager: sessionErrorManager }).pipe(
     Layer.provideMerge(ServerConfig.layerTest(process.cwd(), process.cwd())),
     Layer.provideMerge(providerSessionDirectoryTestLayer),
+    Layer.provideMerge(ProviderToolHostLive),
     Layer.provideMerge(NodeServices.layer),
   ),
 );
@@ -259,6 +262,7 @@ const lifecycleLayer = it.layer(
   makeCodexAdapterLive({ manager: lifecycleManager }).pipe(
     Layer.provideMerge(ServerConfig.layerTest(process.cwd(), process.cwd())),
     Layer.provideMerge(providerSessionDirectoryTestLayer),
+    Layer.provideMerge(ProviderToolHostLive),
     Layer.provideMerge(NodeServices.layer),
   ),
 );

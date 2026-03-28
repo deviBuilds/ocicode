@@ -27,8 +27,12 @@ export const ORCHESTRATION_WS_CHANNELS = {
   domainEvent: "orchestration.domainEvent",
 } as const;
 
-export const ProviderKind = Schema.Literal("codex");
+export const ProviderKind = Schema.Literals(["codex", "claudeAgent"]);
 export type ProviderKind = typeof ProviderKind.Type;
+export const ProviderExecutionMode = Schema.Literals(["disabled", "local", "remote"]);
+export type ProviderExecutionMode = typeof ProviderExecutionMode.Type;
+export const ProviderWorkspaceProxyMode = Schema.Literal("local-proxy");
+export type ProviderWorkspaceProxyMode = typeof ProviderWorkspaceProxyMode.Type;
 export const ProviderApprovalPolicy = Schema.Literals([
   "untrusted",
   "on-failure",
@@ -43,12 +47,33 @@ export const ProviderSandboxMode = Schema.Literals([
 ]);
 export type ProviderSandboxMode = typeof ProviderSandboxMode.Type;
 export const DEFAULT_PROVIDER_KIND: ProviderKind = "codex";
+export const DEFAULT_PROVIDER_EXECUTION_MODE: ProviderExecutionMode = "local";
 const CodexProviderStartOptions = Schema.Struct({
+  executionMode: Schema.optional(ProviderExecutionMode),
   binaryPath: Schema.optional(TrimmedNonEmptyString),
   homePath: Schema.optional(TrimmedNonEmptyString),
+  remote: Schema.optional(
+    Schema.Struct({
+      baseUrl: Schema.optional(TrimmedNonEmptyString),
+      sharedSecret: Schema.optional(TrimmedNonEmptyString),
+      workspaceProxyMode: Schema.optional(ProviderWorkspaceProxyMode),
+    }),
+  ),
+});
+const ClaudeProviderStartOptions = Schema.Struct({
+  executionMode: Schema.optional(ProviderExecutionMode),
+  binaryPath: Schema.optional(TrimmedNonEmptyString),
+  remote: Schema.optional(
+    Schema.Struct({
+      baseUrl: Schema.optional(TrimmedNonEmptyString),
+      sharedSecret: Schema.optional(TrimmedNonEmptyString),
+      workspaceProxyMode: Schema.optional(ProviderWorkspaceProxyMode),
+    }),
+  ),
 });
 const ProviderStartOptions = Schema.Struct({
   codex: Schema.optional(CodexProviderStartOptions),
+  claudeAgent: Schema.optional(ClaudeProviderStartOptions),
 });
 export const RuntimeMode = Schema.Literals(["approval-required", "full-access"]);
 export type RuntimeMode = typeof RuntimeMode.Type;

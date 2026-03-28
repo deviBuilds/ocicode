@@ -11,6 +11,7 @@ import {
   type CanonicalRequestType,
   type ProviderEvent,
   type ProviderRuntimeEvent,
+  type ProviderSession,
   type ProviderUserInputAnswers,
   RuntimeItemId,
   RuntimeRequestId,
@@ -20,6 +21,7 @@ import {
   ThreadId,
   TurnId,
 } from "@ocicode/contracts";
+import { normalizeRemoteBridgeStartInput } from "@ocicode/shared/provider";
 import { Effect, FileSystem, Layer, Queue, Schema, ServiceMap, Stream } from "effect";
 
 import {
@@ -37,9 +39,28 @@ import {
 } from "../../codexAppServerManager.ts";
 import { resolveAttachmentPath } from "../../attachmentStore.ts";
 import { ServerConfig } from "../../config.ts";
+import { ProviderToolHost } from "../Services/ProviderToolHost.ts";
+import {
+  getRemoteProviderBridgeClient,
+  remoteProviderBridgeReadThread,
+  remoteProviderBridgeSendTurn,
+  remoteProviderBridgeStartSession,
+} from "../remoteBridgeClient";
+import { buildWorkspaceProxyUrl } from "../workspaceProxy.ts";
 import { type EventNdjsonLogger, makeEventNdjsonLogger } from "./EventNdjsonLogger.ts";
 
 const PROVIDER = "codex" as const;
+
+interface RemoteBridgeConfig {
+  readonly baseUrl: string;
+  readonly sharedSecret: string;
+}
+
+interface WorkspaceProxyConfig {
+  readonly mode: "local-proxy";
+  readonly url: string;
+  readonly token: string;
+}
 
 export interface CodexAdapterLiveOptions {
   readonly manager?: CodexAppServerManager;
@@ -88,6 +109,30 @@ function toRequestError(threadId: ThreadId, method: string, cause: unknown): Pro
     detail: toMessage(cause, `${method} failed`),
     cause,
   });
+}
+
+function readCodexExecutionMode(input: {
+  readonly providerOptions?: CodexAppServerStartSessionInput["providerOptions"];
+}): "local" | "remote" | "disabled" {
+  return input.providerOptions?.codex?.executionMode ?? "local";
+}
+
+function readWorkspaceProxyMode(input: {
+  readonly providerOptions?: CodexAppServerStartSessionInput["providerOptions"];
+}): "local-proxy" | undefined {
+  return input.providerOptions?.codex?.remote?.workspaceProxyMode;
+}
+
+function readRemoteBridgeConfig(input: {
+  readonly providerOptions?: CodexAppServerStartSessionInput["providerOptions"];
+}): RemoteBridgeConfig | undefined {
+  const remote = input.providerOptions?.codex?.remote;
+  const baseUrl = remote?.baseUrl?.trim();
+  const sharedSecret = remote?.sharedSecret?.trim();
+  if (!baseUrl || !sharedSecret) {
+    return undefined;
+  }
+  return { baseUrl, sharedSecret };
 }
 
 function asObject(value: unknown): Record<string, unknown> | undefined {
@@ -1261,6 +1306,7 @@ const makeCodexAdapter = (options?: CodexAdapterLiveOptions) =>
   Effect.gen(function* () {
     const fileSystem = yield* FileSystem.FileSystem;
     const serverConfig = yield* Effect.service(ServerConfig);
+    const providerToolHost = yield* ProviderToolHost;
     const nativeEventLogger =
       options?.nativeEventLogger ??
       (options?.nativeEventLogPath !== undefined
@@ -1287,6 +1333,72 @@ const makeCodexAdapter = (options?: CodexAdapterLiveOptions) =>
         }),
     );
 
+    const remoteSessions = new Map<ThreadId, ProviderSession>();
+    const remoteSessionBridgeByThreadId = new Map<ThreadId, RemoteBridgeConfig>();
+    const remoteBridgeUnsubscribers = new Map<string, Array<() => void>>();
+    const runtimeEventQueue = yield* Queue.unbounded<ProviderRuntimeEvent>();
+
+    const subscribeToRemoteBridge = (bridge: RemoteBridgeConfig) => {
+      const key = `${bridge.baseUrl}\n${bridge.sharedSecret}`;
+      if (remoteBridgeUnsubscribers.has(key)) {
+        return;
+      }
+      const client = getRemoteProviderBridgeClient(bridge);
+      const unsubscribeEvent = client.subscribe((event) => {
+        if (event.provider !== PROVIDER) {
+          return;
+        }
+        if (!remoteSessionBridgeByThreadId.has(event.threadId)) {
+          return;
+        }
+        const offer = Queue.offer(runtimeEventQueue, event).pipe(Effect.asVoid);
+        void Effect.runFork(offer);
+      });
+      const unsubscribeToolRequests = client.subscribeToolRequests(async (request) => {
+        const session = remoteSessions.get(request.threadId);
+        const requestBridge = remoteSessionBridgeByThreadId.get(request.threadId);
+        if (!session || !requestBridge) {
+          return { handled: false };
+        }
+        if (
+          requestBridge.baseUrl !== bridge.baseUrl ||
+          requestBridge.sharedSecret !== bridge.sharedSecret
+        ) {
+          return { handled: false };
+        }
+
+        try {
+          const result = await Effect.runPromise(
+            providerToolHost.callTool({
+              threadId: request.threadId,
+              toolName: request.toolName,
+              args: request.arguments,
+              ...(session.cwd !== undefined ? { cwd: session.cwd } : {}),
+            }),
+          );
+          return { handled: true, result } as const;
+        } catch (error) {
+          return {
+            handled: true,
+            error: error instanceof Error ? error.message : String(error),
+          } as const;
+        }
+      });
+      remoteBridgeUnsubscribers.set(key, [unsubscribeEvent, unsubscribeToolRequests]);
+    };
+
+    const remoteRequest = <T>(
+      bridge: RemoteBridgeConfig,
+      threadId: ThreadId,
+      method: string,
+      payload: Record<string, unknown>,
+      decode: (input: unknown) => T,
+    ) =>
+      Effect.tryPromise({
+        try: () => getRemoteProviderBridgeClient(bridge).request(method, payload, decode),
+        catch: (cause) => toRequestError(threadId, method, cause),
+      });
+
     const startSession: CodexAdapterShape["startSession"] = (input) => {
       if (input.provider !== undefined && input.provider !== PROVIDER) {
         return Effect.fail(
@@ -1298,31 +1410,149 @@ const makeCodexAdapter = (options?: CodexAdapterLiveOptions) =>
         );
       }
 
-      const managerInput: CodexAppServerStartSessionInput = {
-        threadId: input.threadId,
-        provider: "codex",
-        ...(input.cwd !== undefined ? { cwd: input.cwd } : {}),
-        ...(input.resumeCursor !== undefined ? { resumeCursor: input.resumeCursor } : {}),
-        ...(input.providerOptions !== undefined ? { providerOptions: input.providerOptions } : {}),
-        runtimeMode: input.runtimeMode,
-        ...(input.model !== undefined ? { model: input.model } : {}),
-        ...(input.modelOptions?.codex?.fastMode ? { serviceTier: "fast" } : {}),
-      };
-
-      return Effect.tryPromise({
-        try: () => manager.startSession(managerInput),
-        catch: (cause) =>
-          new ProviderAdapterProcessError({
+      const executionMode = readCodexExecutionMode({
+        providerOptions: input.providerOptions,
+      });
+      if (executionMode === "disabled") {
+        return Effect.fail(
+          new ProviderAdapterValidationError({
             provider: PROVIDER,
-            threadId: input.threadId,
-            detail: toMessage(cause, "Failed to start Codex adapter session."),
-            cause,
+            operation: "startSession",
+            issue: "Codex is disabled for this thread.",
           }),
-      }).pipe(Effect.map((session) => session));
+        );
+      }
+      if (executionMode === "remote") {
+        const bridge = readRemoteBridgeConfig({
+          providerOptions: input.providerOptions,
+        });
+        if (!bridge) {
+          return Effect.fail(
+            new ProviderAdapterValidationError({
+              provider: PROVIDER,
+              operation: "startSession",
+              issue: "Remote Codex mode requires a remote bridge URL and shared secret.",
+            }),
+          );
+        }
+        subscribeToRemoteBridge(bridge);
+        const payload = normalizeRemoteBridgeStartInput(input);
+        return remoteProviderBridgeStartSession({
+          ...bridge,
+          payload,
+        }).pipe(
+          Effect.tap((session) =>
+            Effect.sync(() => {
+              const sessionForLocalWorkspace: ProviderSession = {
+                ...session,
+                runtimeMode: input.runtimeMode,
+                ...(input.cwd !== undefined ? { cwd: input.cwd } : {}),
+              };
+              remoteSessions.set(session.threadId, sessionForLocalWorkspace);
+              remoteSessionBridgeByThreadId.set(session.threadId, bridge);
+            }),
+          ),
+          Effect.map((session) => ({
+            ...session,
+            runtimeMode: input.runtimeMode,
+            ...(input.cwd !== undefined ? { cwd: input.cwd } : {}),
+          })),
+          Effect.mapError(
+            (cause) =>
+              new ProviderAdapterProcessError({
+                provider: PROVIDER,
+                threadId: input.threadId,
+                detail: toMessage(cause, "Failed to start remote Codex adapter session."),
+                cause,
+              }),
+          ),
+        );
+      }
+
+      return Effect.gen(function* () {
+        const workspaceProxyMode = readWorkspaceProxyMode({
+          providerOptions: input.providerOptions,
+        });
+        const workspaceProxy: WorkspaceProxyConfig | undefined =
+          workspaceProxyMode === "local-proxy"
+            ? yield* providerToolHost.openSession(input.threadId).pipe(
+                Effect.map(({ token }) => ({
+                  mode: "local-proxy" as const,
+                  token,
+                  url: buildWorkspaceProxyUrl(serverConfig.port, token),
+                })),
+                Effect.mapError(
+                  (cause) =>
+                    new ProviderAdapterProcessError({
+                      provider: PROVIDER,
+                      threadId: input.threadId,
+                      detail: toMessage(cause, "Failed to prepare the local workspace proxy."),
+                      cause,
+                    }),
+                ),
+              )
+            : undefined;
+
+        const managerInput: CodexAppServerStartSessionInput = {
+          threadId: input.threadId,
+          provider: "codex",
+          ...(workspaceProxy
+            ? { cwd: serverConfig.cwd }
+            : input.cwd !== undefined
+              ? { cwd: input.cwd }
+              : {}),
+          ...(input.resumeCursor !== undefined ? { resumeCursor: input.resumeCursor } : {}),
+          ...(input.providerOptions !== undefined
+            ? { providerOptions: input.providerOptions }
+            : {}),
+          runtimeMode: workspaceProxy ? "approval-required" : input.runtimeMode,
+          ...(input.model !== undefined ? { model: input.model } : {}),
+          ...(input.modelOptions?.codex?.fastMode ? { serviceTier: "fast" } : {}),
+          ...(workspaceProxy ? { workspaceProxy } : {}),
+        };
+
+        const session = yield* Effect.tryPromise({
+          try: () => manager.startSession(managerInput),
+          catch: (cause) =>
+            new ProviderAdapterProcessError({
+              provider: PROVIDER,
+              threadId: input.threadId,
+              detail: toMessage(cause, "Failed to start Codex adapter session."),
+              cause,
+            }),
+        }).pipe(
+          Effect.catch((error) =>
+            workspaceProxy
+              ? providerToolHost
+                  .closeSession(input.threadId)
+                  .pipe(Effect.flatMap(() => Effect.fail(error)))
+              : Effect.fail(error),
+          ),
+        );
+
+        return {
+          ...session,
+          runtimeMode: input.runtimeMode,
+          ...(input.cwd !== undefined ? { cwd: input.cwd } : {}),
+        };
+      });
     };
 
     const sendTurn: CodexAdapterShape["sendTurn"] = (input) =>
       Effect.gen(function* () {
+        const remoteBridge = remoteSessionBridgeByThreadId.get(input.threadId);
+        const remoteSession = remoteSessions.get(input.threadId);
+        if (remoteBridge && remoteSession) {
+          const turn = yield* remoteProviderBridgeSendTurn({
+            ...remoteBridge,
+            payload: input,
+          }).pipe(Effect.mapError((cause) => toRequestError(input.threadId, "turn/start", cause)));
+          return {
+            ...turn,
+            threadId: input.threadId,
+          };
+        }
+
         const codexAttachments = yield* Effect.forEach(
           input.attachments ?? [],
           (attachment) =>
@@ -1378,21 +1608,43 @@ const makeCodexAdapter = (options?: CodexAdapterLiveOptions) =>
       });
 
     const interruptTurn: CodexAdapterShape["interruptTurn"] = (threadId, turnId) =>
-      Effect.tryPromise({
-        try: () => manager.interruptTurn(threadId, turnId),
-        catch: (cause) => toRequestError(threadId, "turn/interrupt", cause),
+      Effect.gen(function* () {
+        const remoteBridge = remoteSessionBridgeByThreadId.get(threadId);
+        if (remoteBridge) {
+          yield* remoteRequest(
+            remoteBridge,
+            threadId,
+            "providerBridge.interruptTurn",
+            { threadId, ...(turnId ? { turnId } : {}) },
+            Schema.decodeUnknownSync(Schema.Unknown),
+          );
+          return;
+        }
+        yield* Effect.tryPromise({
+          try: () => manager.interruptTurn(threadId, turnId),
+          catch: (cause) => toRequestError(threadId, "turn/interrupt", cause),
+        });
       });
 
     const readThread: CodexAdapterShape["readThread"] = (threadId) =>
-      Effect.tryPromise({
-        try: () => manager.readThread(threadId),
-        catch: (cause) => toRequestError(threadId, "thread/read", cause),
-      }).pipe(
-        Effect.map((snapshot) => ({
-          threadId,
-          turns: snapshot.turns,
-        })),
-      );
+      Effect.gen(function* () {
+        const remoteBridge = remoteSessionBridgeByThreadId.get(threadId);
+        if (remoteBridge) {
+          return yield* remoteProviderBridgeReadThread({
+            ...remoteBridge,
+            payload: { threadId },
+          }).pipe(Effect.mapError((cause) => toRequestError(threadId, "thread/read", cause)));
+        }
+        return yield* Effect.tryPromise({
+          try: () => manager.readThread(threadId),
+          catch: (cause) => toRequestError(threadId, "thread/read", cause),
+        }).pipe(
+          Effect.map((snapshot) => ({
+            threadId,
+            turns: snapshot.turns,
+          })),
+        );
+      });
 
     const rollbackThread: CodexAdapterShape["rollbackThread"] = (threadId, numTurns) => {
       if (!Number.isInteger(numTurns) || numTurns < 1) {
@@ -1402,6 +1654,27 @@ const makeCodexAdapter = (options?: CodexAdapterLiveOptions) =>
             operation: "rollbackThread",
             issue: "numTurns must be an integer >= 1.",
           }),
+        );
+      }
+
+      const remoteBridge = remoteSessionBridgeByThreadId.get(threadId);
+      if (remoteBridge) {
+        return remoteRequest(
+          remoteBridge,
+          threadId,
+          "providerBridge.rollbackThread",
+          { threadId, numTurns },
+          Schema.decodeUnknownSync(
+            Schema.Struct({
+              threadId: ThreadId,
+              turns: Schema.Array(
+                Schema.Struct({
+                  id: TurnId,
+                  items: Schema.Array(Schema.Unknown),
+                }),
+              ),
+            }),
+          ),
         );
       }
 
@@ -1421,9 +1694,22 @@ const makeCodexAdapter = (options?: CodexAdapterLiveOptions) =>
       requestId,
       decision,
     ) =>
-      Effect.tryPromise({
-        try: () => manager.respondToRequest(threadId, requestId, decision),
-        catch: (cause) => toRequestError(threadId, "item/requestApproval/decision", cause),
+      Effect.gen(function* () {
+        const remoteBridge = remoteSessionBridgeByThreadId.get(threadId);
+        if (remoteBridge) {
+          yield* remoteRequest(
+            remoteBridge,
+            threadId,
+            "providerBridge.respondToRequest",
+            { threadId, requestId, decision },
+            Schema.decodeUnknownSync(Schema.Unknown),
+          );
+          return;
+        }
+        yield* Effect.tryPromise({
+          try: () => manager.respondToRequest(threadId, requestId, decision),
+          catch: (cause) => toRequestError(threadId, "item/requestApproval/decision", cause),
+        });
       });
 
     const respondToUserInput: CodexAdapterShape["respondToUserInput"] = (
@@ -1431,28 +1717,80 @@ const makeCodexAdapter = (options?: CodexAdapterLiveOptions) =>
       requestId,
       answers,
     ) =>
-      Effect.tryPromise({
-        try: () => manager.respondToUserInput(threadId, requestId, answers),
-        catch: (cause) => toRequestError(threadId, "item/tool/requestUserInput", cause),
+      Effect.gen(function* () {
+        const remoteBridge = remoteSessionBridgeByThreadId.get(threadId);
+        if (remoteBridge) {
+          yield* remoteRequest(
+            remoteBridge,
+            threadId,
+            "providerBridge.respondToUserInput",
+            { threadId, requestId, answers },
+            Schema.decodeUnknownSync(Schema.Unknown),
+          );
+          return;
+        }
+        yield* Effect.tryPromise({
+          try: () => manager.respondToUserInput(threadId, requestId, answers),
+          catch: (cause) => toRequestError(threadId, "item/tool/requestUserInput", cause),
+        });
       });
 
     const stopSession: CodexAdapterShape["stopSession"] = (threadId) =>
-      Effect.sync(() => {
-        manager.stopSession(threadId);
+      Effect.gen(function* () {
+        const remoteBridge = remoteSessionBridgeByThreadId.get(threadId);
+        if (remoteBridge) {
+          yield* remoteRequest(
+            remoteBridge,
+            threadId,
+            "providerBridge.stopSession",
+            { threadId },
+            Schema.decodeUnknownSync(Schema.Unknown),
+          );
+          yield* Effect.sync(() => {
+            remoteSessions.delete(threadId);
+            remoteSessionBridgeByThreadId.delete(threadId);
+          });
+          return;
+        }
+        yield* providerToolHost.closeSession(threadId);
+        yield* Effect.sync(() => {
+          manager.stopSession(threadId);
+        });
       });
 
     const listSessions: CodexAdapterShape["listSessions"] = () =>
-      Effect.sync(() => manager.listSessions());
+      Effect.sync(() => [...manager.listSessions(), ...remoteSessions.values()]);
 
     const hasSession: CodexAdapterShape["hasSession"] = (threadId) =>
-      Effect.sync(() => manager.hasSession(threadId));
+      Effect.sync(() => remoteSessions.has(threadId) || manager.hasSession(threadId));
 
     const stopAll: CodexAdapterShape["stopAll"] = () =>
-      Effect.sync(() => {
-        manager.stopAll();
+      Effect.gen(function* () {
+        const localSessionThreadIds = manager.listSessions().map((session) => session.threadId);
+        yield* Effect.sync(() => {
+          manager.stopAll();
+        });
+        for (const threadId of localSessionThreadIds) {
+          yield* providerToolHost.closeSession(threadId);
+        }
+        for (const threadId of remoteSessions.keys()) {
+          const remoteBridge = remoteSessionBridgeByThreadId.get(threadId);
+          if (!remoteBridge) {
+            continue;
+          }
+          yield* remoteRequest(
+            remoteBridge,
+            threadId,
+            "providerBridge.stopSession",
+            { threadId },
+            Schema.decodeUnknownSync(Schema.Unknown),
+          ).pipe(Effect.ignore({ log: true }));
+        }
+        yield* Effect.sync(() => {
+          remoteSessions.clear();
+          remoteSessionBridgeByThreadId.clear();
+        });
       });
-
-    const runtimeEventQueue = yield* Queue.unbounded<ProviderRuntimeEvent>();
 
     yield* Effect.acquireRelease(
       Effect.gen(function* () {
@@ -1490,6 +1828,17 @@ const makeCodexAdapter = (options?: CodexAdapterLiveOptions) =>
           });
           yield* Queue.shutdown(runtimeEventQueue);
         }),
+    );
+
+    yield* Effect.addFinalizer(() =>
+      Effect.sync(() => {
+        for (const unsubscribers of remoteBridgeUnsubscribers.values()) {
+          for (const unsubscribe of unsubscribers) {
+            unsubscribe();
+          }
+        }
+        remoteBridgeUnsubscribers.clear();
+      }),
     );
 
     return {

@@ -5,6 +5,9 @@ import { type ProviderKind } from "@ocicode/contracts";
 import { getModelOptions, normalizeModelSlug } from "@ocicode/shared/model";
 
 import {
+  buildProviderHealthInput,
+  getCustomModelsForProvider,
+  getProviderExecutionMode,
   MAX_CUSTOM_MODEL_LENGTH,
   type SidebarProjectSortOrder,
   type SidebarThreadSortOrder,
@@ -14,7 +17,10 @@ import { openInPreferredEditor } from "../editorPreferences";
 import { isElectron } from "../env";
 import { useColorTint, type ColorTint } from "../hooks/useColorTint";
 import { useTheme } from "../hooks/useTheme";
-import { serverConfigQueryOptions } from "../lib/serverReactQuery";
+import {
+  serverConfigQueryOptions,
+  serverProviderHealthQueryOptions,
+} from "../lib/serverReactQuery";
 import { ensureNativeApi } from "../nativeApi";
 import { type TimestampFormat } from "../timestampFormat";
 import { Button } from "../components/ui/button";
@@ -71,6 +77,31 @@ const MODEL_PROVIDER_SETTINGS: Array<{
     description: "Save additional Codex model slugs for the picker and `/model` command.",
     placeholder: "your-codex-model-slug",
     example: "gpt-6.7-codex-ultra-preview",
+  },
+  {
+    provider: "claudeAgent",
+    title: "Claude",
+    description: "Save additional Claude model slugs for the picker and `/model` command.",
+    placeholder: "your-claude-model-slug",
+    example: "claude-opus-5-preview",
+  },
+] as const;
+
+const PROVIDER_EXECUTION_OPTIONS = [
+  {
+    value: "disabled",
+    label: "Disabled",
+    description: "Hide this provider from new chats and block new turns on existing threads.",
+  },
+  {
+    value: "local",
+    label: "Local",
+    description: "Launch the provider CLI on this machine.",
+  },
+  {
+    value: "remote",
+    label: "Remote",
+    description: "Connect to a remote provider bridge while keeping tools and files local.",
   },
 ] as const;
 
@@ -148,23 +179,15 @@ const SIDEBAR_THREAD_SORT_OPTIONS: ReadonlyArray<{
   },
 ];
 
-function getCustomModelsForProvider(
-  settings: ReturnType<typeof useAppSettings>["settings"],
-  provider: ProviderKind,
-) {
-  switch (provider) {
-    case "codex":
-    default:
-      return settings.customCodexModels;
-  }
-}
-
 function getDefaultCustomModelsForProvider(
   defaults: ReturnType<typeof useAppSettings>["defaults"],
   provider: ProviderKind,
 ) {
   switch (provider) {
     case "codex":
+      return defaults.customCodexModels;
+    case "claudeAgent":
+      return defaults.customClaudeModels;
     default:
       return defaults.customCodexModels;
   }
@@ -173,6 +196,9 @@ function getDefaultCustomModelsForProvider(
 function patchCustomModels(provider: ProviderKind, models: string[]) {
   switch (provider) {
     case "codex":
+      return { customCodexModels: models };
+    case "claudeAgent":
+      return { customClaudeModels: models };
     default:
       return { customCodexModels: models };
   }
@@ -183,12 +209,30 @@ function SettingsRouteView() {
   const { tint, setTint } = useColorTint();
   const { settings, defaults, updateSettings } = useAppSettings();
   const serverConfigQuery = useQuery(serverConfigQueryOptions());
+  const serverFeatureFlags = serverConfigQuery.data?.featureFlags ?? {
+    claudeBuildEnabled: false,
+    remoteProviderModeBuildEnabled: false,
+  };
+  const visibleProviders = MODEL_PROVIDER_SETTINGS.filter(
+    (providerSettings) =>
+      providerSettings.provider === "codex" ||
+      (providerSettings.provider === "claudeAgent" && serverFeatureFlags.claudeBuildEnabled),
+  );
+  const codexHealthQuery = useQuery(
+    serverProviderHealthQueryOptions(buildProviderHealthInput(settings, "codex")),
+  );
+  const claudeHealthQuery = useQuery(
+    serverProviderHealthQueryOptions(buildProviderHealthInput(settings, "claudeAgent"), {
+      enabled: serverFeatureFlags.claudeBuildEnabled,
+    }),
+  );
   const [isOpeningKeybindings, setIsOpeningKeybindings] = useState(false);
   const [openKeybindingsError, setOpenKeybindingsError] = useState<string | null>(null);
   const [customModelInputByProvider, setCustomModelInputByProvider] = useState<
     Record<ProviderKind, string>
   >({
     codex: "",
+    claudeAgent: "",
   });
   const [customModelErrorByProvider, setCustomModelErrorByProvider] = useState<
     Partial<Record<ProviderKind, string | null>>
@@ -196,6 +240,10 @@ function SettingsRouteView() {
 
   const codexBinaryPath = settings.codexBinaryPath;
   const codexHomePath = settings.codexHomePath;
+  const claudeBinaryPath = settings.claudeBinaryPath;
+  const anyRemoteModeEnabled = visibleProviders.some(
+    ({ provider }) => getProviderExecutionMode(settings, provider) === "remote",
+  );
   const keybindingsConfigPath = serverConfigQuery.data?.keybindingsConfigPath ?? null;
 
   const openKeybindingsFile = useCallback(() => {
@@ -382,59 +430,197 @@ function SettingsRouteView() {
 
             <section className="rounded-2xl border border-border bg-card p-5">
               <div className="mb-4">
-                <h2 className="text-sm font-medium text-foreground">Codex App Server</h2>
+                <h2 className="text-sm font-medium text-foreground">Provider Execution</h2>
                 <p className="mt-1 text-xs text-muted-foreground">
-                  These overrides apply to new sessions and let you use a non-default Codex install.
+                  Choose whether each provider is disabled, launched locally, or reached through a
+                  remote bridge while the workspace stays on this device.
                 </p>
               </div>
 
-              <div className="space-y-4">
-                <label htmlFor="codex-binary-path" className="block space-y-1">
-                  <span className="text-xs font-medium text-foreground">Codex binary path</span>
-                  <Input
-                    id="codex-binary-path"
-                    value={codexBinaryPath}
-                    onChange={(event) => updateSettings({ codexBinaryPath: event.target.value })}
-                    placeholder="codex"
-                    spellCheck={false}
-                  />
-                  <span className="text-xs text-muted-foreground">
-                    Leave blank to use <code>codex</code> from your PATH.
-                  </span>
-                </label>
+              <div className="space-y-5">
+                {visibleProviders.map((providerSettings) => {
+                  const provider = providerSettings.provider;
+                  const mode = getProviderExecutionMode(settings, provider);
+                  const healthQuery = provider === "codex" ? codexHealthQuery : claudeHealthQuery;
+                  const healthStatus = healthQuery.data;
 
-                <label htmlFor="codex-home-path" className="block space-y-1">
-                  <span className="text-xs font-medium text-foreground">CODEX_HOME path</span>
-                  <Input
-                    id="codex-home-path"
-                    value={codexHomePath}
-                    onChange={(event) => updateSettings({ codexHomePath: event.target.value })}
-                    placeholder="/Users/you/.codex"
-                    spellCheck={false}
-                  />
-                  <span className="text-xs text-muted-foreground">
-                    Optional custom Codex home/config directory.
-                  </span>
-                </label>
+                  return (
+                    <div
+                      key={`provider-execution-${provider}`}
+                      className="rounded-xl border border-border bg-background/50 p-4"
+                    >
+                      <div className="mb-4">
+                        <h3 className="text-sm font-medium text-foreground">
+                          {providerSettings.title}
+                        </h3>
+                        <p className="mt-1 text-xs text-muted-foreground">
+                          {provider === "codex"
+                            ? "Codex can run locally or through the remote bridge."
+                            : "Claude is build-gated and can be fully hidden or run through the remote bridge."}
+                        </p>
+                      </div>
 
-                <div className="flex items-center justify-between gap-2 text-xs text-muted-foreground">
-                  <p>
-                    Binary source:{" "}
-                    <span className="font-medium text-foreground">{codexBinaryPath || "PATH"}</span>
-                  </p>
-                  <Button
-                    size="xs"
-                    variant="outline"
-                    onClick={() =>
-                      updateSettings({
-                        codexBinaryPath: defaults.codexBinaryPath,
-                        codexHomePath: defaults.codexHomePath,
-                      })
-                    }
-                  >
-                    Reset codex overrides
-                  </Button>
-                </div>
+                      <div className="grid gap-2 sm:grid-cols-3">
+                        {PROVIDER_EXECUTION_OPTIONS.map((option) => {
+                          const selected = mode === option.value;
+                          const remoteUnavailable =
+                            option.value === "remote" &&
+                            !serverFeatureFlags.remoteProviderModeBuildEnabled;
+                          return (
+                            <button
+                              key={`${provider}:${option.value}`}
+                              type="button"
+                              disabled={remoteUnavailable}
+                              className={cn(
+                                "rounded-lg border px-3 py-2 text-left transition-colors disabled:cursor-not-allowed disabled:opacity-55",
+                                selected
+                                  ? "border-primary/60 bg-primary/8 text-foreground"
+                                  : "border-border bg-background text-muted-foreground hover:bg-accent",
+                              )}
+                              onClick={() =>
+                                updateSettings(
+                                  provider === "codex"
+                                    ? { codexMode: option.value }
+                                    : { claudeMode: option.value },
+                                )
+                              }
+                            >
+                              <span className="block text-sm font-medium text-inherit">
+                                {option.label}
+                              </span>
+                              <span className="mt-1 block text-xs opacity-80">
+                                {remoteUnavailable
+                                  ? "Remote provider mode is not enabled in this build."
+                                  : option.description}
+                              </span>
+                            </button>
+                          );
+                        })}
+                      </div>
+
+                      <div className="mt-4 space-y-3">
+                        {provider === "codex" ? (
+                          <>
+                            <label htmlFor="codex-binary-path" className="block space-y-1">
+                              <span className="text-xs font-medium text-foreground">
+                                Codex binary path
+                              </span>
+                              <Input
+                                id="codex-binary-path"
+                                value={codexBinaryPath}
+                                onChange={(event) =>
+                                  updateSettings({ codexBinaryPath: event.target.value })
+                                }
+                                placeholder="codex"
+                                spellCheck={false}
+                              />
+                            </label>
+
+                            <label htmlFor="codex-home-path" className="block space-y-1">
+                              <span className="text-xs font-medium text-foreground">
+                                CODEX_HOME path
+                              </span>
+                              <Input
+                                id="codex-home-path"
+                                value={codexHomePath}
+                                onChange={(event) =>
+                                  updateSettings({ codexHomePath: event.target.value })
+                                }
+                                placeholder="/Users/you/.codex"
+                                spellCheck={false}
+                              />
+                            </label>
+                          </>
+                        ) : (
+                          <label htmlFor="claude-binary-path" className="block space-y-1">
+                            <span className="text-xs font-medium text-foreground">
+                              Claude binary path
+                            </span>
+                            <Input
+                              id="claude-binary-path"
+                              value={claudeBinaryPath}
+                              onChange={(event) =>
+                                updateSettings({ claudeBinaryPath: event.target.value })
+                              }
+                              placeholder="claude"
+                              spellCheck={false}
+                            />
+                          </label>
+                        )}
+
+                        <div className="rounded-lg border border-border bg-background px-3 py-2">
+                          <p className="text-xs font-medium text-foreground">
+                            Current status
+                            {healthStatus?.executionMode ? ` · ${healthStatus.executionMode}` : ""}
+                          </p>
+                          <p className="mt-1 text-xs text-muted-foreground">
+                            {healthQuery.isLoading
+                              ? "Checking provider status..."
+                              : (healthStatus?.message ??
+                                (healthStatus?.available
+                                  ? "Provider is ready."
+                                  : "Provider is unavailable."))}
+                          </p>
+                          <div className="mt-2 flex justify-end">
+                            <Button
+                              size="xs"
+                              variant="outline"
+                              onClick={() => healthQuery.refetch()}
+                            >
+                              Test connection
+                            </Button>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })}
+
+                {serverFeatureFlags.remoteProviderModeBuildEnabled ? (
+                  <div className="rounded-xl border border-border bg-background/50 p-4">
+                    <div className="mb-4">
+                      <h3 className="text-sm font-medium text-foreground">Remote bridge</h3>
+                      <p className="mt-1 text-xs text-muted-foreground">
+                        Shared remote bridge connection settings used by providers in remote mode.
+                      </p>
+                    </div>
+
+                    <div className="space-y-4">
+                      <label htmlFor="remote-bridge-url" className="block space-y-1">
+                        <span className="text-xs font-medium text-foreground">Bridge base URL</span>
+                        <Input
+                          id="remote-bridge-url"
+                          value={settings.remoteBridgeUrl}
+                          onChange={(event) =>
+                            updateSettings({ remoteBridgeUrl: event.target.value })
+                          }
+                          placeholder="ws://192.168.1.10:4321"
+                          spellCheck={false}
+                        />
+                      </label>
+
+                      <label htmlFor="remote-bridge-secret" className="block space-y-1">
+                        <span className="text-xs font-medium text-foreground">Shared secret</span>
+                        <Input
+                          id="remote-bridge-secret"
+                          value={settings.remoteBridgeSharedSecret}
+                          onChange={(event) =>
+                            updateSettings({ remoteBridgeSharedSecret: event.target.value })
+                          }
+                          placeholder="shared-secret"
+                          spellCheck={false}
+                          type="password"
+                        />
+                      </label>
+
+                      {!anyRemoteModeEnabled ? (
+                        <p className="text-xs text-muted-foreground">
+                          Enable remote mode on at least one provider to use these settings.
+                        </p>
+                      ) : null}
+                    </div>
+                  </div>
+                ) : null}
               </div>
             </section>
 
@@ -448,7 +634,7 @@ function SettingsRouteView() {
               </div>
 
               <div className="space-y-5">
-                {MODEL_PROVIDER_SETTINGS.map((providerSettings) => {
+                {visibleProviders.map((providerSettings) => {
                   const provider = providerSettings.provider;
                   const customModels = getCustomModelsForProvider(settings, provider);
                   const customModelInput = customModelInputByProvider[provider];

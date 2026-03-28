@@ -38,6 +38,7 @@ import { ProviderAdapterRegistry } from "../src/provider/Services/ProviderAdapte
 import { ProviderSessionDirectoryLive } from "../src/provider/Layers/ProviderSessionDirectory.ts";
 import { makeProviderServiceLive } from "../src/provider/Layers/ProviderService.ts";
 import { makeCodexAdapterLive } from "../src/provider/Layers/CodexAdapter.ts";
+import { ProviderToolHostLive } from "../src/provider/Layers/ProviderToolHost.ts";
 import { CodexAdapter } from "../src/provider/Services/CodexAdapter.ts";
 import { ProviderService } from "../src/provider/Services/ProviderService.ts";
 import { CheckpointReactorLive } from "../src/orchestration/Layers/CheckpointReactor.ts";
@@ -246,6 +247,7 @@ export const makeOrchestrationIntegrationHarness = (
       Layer.provide(makeCodexAdapterLive()),
       Layer.provideMerge(ServerConfig.layerTest(workspaceDir, stateDir)),
       Layer.provideMerge(NodeServices.layer),
+      Layer.provideMerge(ProviderToolHostLive),
       Layer.provideMerge(providerSessionDirectoryLayer),
     );
     const providerLayer = useRealCodex

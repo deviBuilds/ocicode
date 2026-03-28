@@ -18,11 +18,14 @@ import { OrchestrationProjectionPipelineLive } from "./orchestration/Layers/Proj
 import { OrchestrationProjectionSnapshotQueryLive } from "./orchestration/Layers/ProjectionSnapshotQuery";
 import { ProviderRuntimeIngestionLive } from "./orchestration/Layers/ProviderRuntimeIngestion";
 import { ProviderUnsupportedError } from "./provider/Errors";
+import { makeClaudeAdapterLive } from "./provider/Layers/ClaudeAdapter";
 import { makeCodexAdapterLive } from "./provider/Layers/CodexAdapter";
 import { ProviderAdapterRegistryLive } from "./provider/Layers/ProviderAdapterRegistry";
 import { makeProviderServiceLive } from "./provider/Layers/ProviderService";
 import { ProviderSessionDirectoryLive } from "./provider/Layers/ProviderSessionDirectory";
+import { ProviderToolHostLive } from "./provider/Layers/ProviderToolHost";
 import { ProviderService } from "./provider/Services/ProviderService";
+import { ProviderToolHost } from "./provider/Services/ProviderToolHost";
 import { makeEventNdjsonLogger } from "./provider/Layers/EventNdjsonLogger";
 
 import { TerminalManagerLive } from "./terminal/Layers/Manager";
@@ -52,7 +55,7 @@ const makeRuntimePtyAdapterLayer = () =>
   }).pipe(Layer.unwrap);
 
 export function makeServerProviderLayer(): Layer.Layer<
-  ProviderService,
+  ProviderService | ProviderToolHost,
   ProviderUnsupportedError,
   SqlClient.SqlClient | ServerConfig | FileSystem.FileSystem
 > {
@@ -69,16 +72,26 @@ export function makeServerProviderLayer(): Layer.Layer<
     const providerSessionDirectoryLayer = ProviderSessionDirectoryLive.pipe(
       Layer.provide(ProviderSessionRuntimeRepositoryLive),
     );
+    const providerToolHostLayer = ProviderToolHostLive;
     const codexAdapterLayer = makeCodexAdapterLive(
       nativeEventLogger ? { nativeEventLogger } : undefined,
     );
+    const claudeAdapterLayer = makeClaudeAdapterLive();
     const adapterRegistryLayer = ProviderAdapterRegistryLive.pipe(
       Layer.provide(codexAdapterLayer),
+      Layer.provide(claudeAdapterLayer),
+      Layer.provideMerge(providerToolHostLayer),
       Layer.provideMerge(providerSessionDirectoryLayer),
     );
-    return makeProviderServiceLive(
+    const providerServiceLayer = makeProviderServiceLive(
       canonicalEventLogger ? { canonicalEventLogger } : undefined,
-    ).pipe(Layer.provide(adapterRegistryLayer), Layer.provide(providerSessionDirectoryLayer));
+    ).pipe(
+      Layer.provide(adapterRegistryLayer),
+      Layer.provide(providerSessionDirectoryLayer),
+      Layer.provide(providerToolHostLayer),
+    );
+
+    return Layer.mergeAll(providerServiceLayer, providerToolHostLayer);
   }).pipe(Layer.unwrap);
 }
 

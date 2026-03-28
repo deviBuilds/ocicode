@@ -147,6 +147,22 @@ export class ProviderSessionDirectoryPersistenceError extends Schema.TaggedError
   }
 }
 
+/**
+ * ProviderToolHostError - Local workspace proxy/tool-host failure.
+ */
+export class ProviderToolHostError extends Schema.TaggedErrorClass<ProviderToolHostError>()(
+  "ProviderToolHostError",
+  {
+    operation: Schema.String,
+    detail: Schema.String,
+    cause: Schema.optional(Schema.Defect),
+  },
+) {
+  override get message(): string {
+    return `Provider tool host error in ${this.operation}: ${this.detail}`;
+  }
+}
+
 export type ProviderAdapterError =
   | ProviderAdapterValidationError
   | ProviderAdapterSessionNotFoundError
@@ -159,5 +175,6 @@ export type ProviderServiceError =
   | ProviderUnsupportedError
   | ProviderSessionNotFoundError
   | ProviderSessionDirectoryPersistenceError
+  | ProviderToolHostError
   | ProviderAdapterError
   | CheckpointServiceError;

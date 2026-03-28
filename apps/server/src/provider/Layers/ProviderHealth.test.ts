@@ -64,7 +64,7 @@ function providerHealthTestLayer(
 
 it.effect("returns ready when codex is installed and authenticated", () =>
   Effect.gen(function* () {
-    const status = yield* checkCodexProviderStatus;
+    const status = yield* checkCodexProviderStatus();
     assert.strictEqual(status.provider, "codex");
     assert.strictEqual(status.status, "ready");
     assert.strictEqual(status.available, true);
@@ -85,7 +85,7 @@ it.effect("returns ready when codex is installed and authenticated", () =>
 
 it.effect("returns unavailable when codex is missing", () =>
   Effect.gen(function* () {
-    const status = yield* checkCodexProviderStatus;
+    const status = yield* checkCodexProviderStatus();
     assert.strictEqual(status.provider, "codex");
     assert.strictEqual(status.status, "error");
     assert.strictEqual(status.available, false);
@@ -96,7 +96,7 @@ it.effect("returns unavailable when codex is missing", () =>
 
 it.effect("returns unavailable when codex is below the minimum supported version", () =>
   Effect.gen(function* () {
-    const status = yield* checkCodexProviderStatus;
+    const status = yield* checkCodexProviderStatus();
     assert.strictEqual(status.provider, "codex");
     assert.strictEqual(status.status, "error");
     assert.strictEqual(status.available, false);
@@ -120,7 +120,7 @@ it.effect("returns unavailable when codex is below the minimum supported version
 
 it.effect("returns unauthenticated when auth probe reports login required", () =>
   Effect.gen(function* () {
-    const status = yield* checkCodexProviderStatus;
+    const status = yield* checkCodexProviderStatus();
     assert.strictEqual(status.provider, "codex");
     assert.strictEqual(status.status, "error");
     assert.strictEqual(status.available, true);
@@ -147,7 +147,7 @@ it.effect("returns unauthenticated when auth probe reports login required", () =
 
 it.effect("returns unauthenticated when login status output includes 'not logged in'", () =>
   Effect.gen(function* () {
-    const status = yield* checkCodexProviderStatus;
+    const status = yield* checkCodexProviderStatus();
     assert.strictEqual(status.provider, "codex");
     assert.strictEqual(status.status, "error");
     assert.strictEqual(status.available, true);
@@ -172,7 +172,7 @@ it.effect("returns unauthenticated when login status output includes 'not logged
 
 it.effect("returns warning when login status command is unsupported", () =>
   Effect.gen(function* () {
-    const status = yield* checkCodexProviderStatus;
+    const status = yield* checkCodexProviderStatus();
     assert.strictEqual(status.provider, "codex");
     assert.strictEqual(status.status, "warning");
     assert.strictEqual(status.available, true);
