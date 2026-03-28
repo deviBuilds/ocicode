@@ -882,6 +882,10 @@ function backendChildEnv(): NodeJS.ProcessEnv {
   delete env.OCICODE_NO_BROWSER;
   delete env.OCICODE_HOST;
   delete env.OCICODE_DESKTOP_WS_URL;
+  if (env.OCICODE_ENABLE_CLAUDE_PROVIDER === "1" || env.OCICODE_ENABLE_CLAUDE_PROVIDER === "true") {
+    delete env.ANTHROPIC_API_KEY;
+    delete env.ANTHROPIC_AUTH_TOKEN;
+  }
   return env;
 }
 

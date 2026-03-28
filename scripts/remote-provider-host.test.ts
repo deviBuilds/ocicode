@@ -61,7 +61,10 @@ describe("buildRemoteProviderHostEnv", () => {
         enableClaudeProvider: true,
         mode: "dev",
       },
-      {},
+      {
+        ANTHROPIC_API_KEY: "stale-key",
+        ANTHROPIC_AUTH_TOKEN: "stale-token",
+      },
     );
 
     expect(env.OCICODE_MODE).toBe("web");
@@ -71,6 +74,8 @@ describe("buildRemoteProviderHostEnv", () => {
     expect(env.OCICODE_ENABLE_REMOTE_PROVIDER_MODE).toBe("1");
     expect(env.OCICODE_PROVIDER_BRIDGE_SHARED_SECRET).toBe("secret");
     expect(env.OCICODE_ENABLE_CLAUDE_PROVIDER).toBe("1");
+    expect(env.ANTHROPIC_API_KEY).toBeUndefined();
+    expect(env.ANTHROPIC_AUTH_TOKEN).toBeUndefined();
   });
 });
 

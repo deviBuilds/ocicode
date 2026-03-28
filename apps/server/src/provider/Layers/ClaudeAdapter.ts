@@ -576,12 +576,13 @@ function buildClaudeQueryOptions(input: {
   readonly canUseTool?: CanUseTool;
   readonly interactionMode?: "default" | "plan";
 }): ClaudeQueryOptions {
+  const usesWorkspaceProxy = input.context.workspaceProxy !== undefined;
   const permissionMode =
     input.interactionMode === "plan"
       ? "plan"
-      : input.context.workspaceProxy || input.context.session.runtimeMode === "full-access"
+      : !usesWorkspaceProxy && input.context.session.runtimeMode === "full-access"
         ? "bypassPermissions"
-        : "default";
+        : undefined;
   const normalizedModelOptions = normalizeClaudeModelOptions(
     input.model,
     input.modelOptions?.claudeAgent,
@@ -597,11 +598,12 @@ function buildClaudeQueryOptions(input: {
     model: input.model,
     ...(input.context.session.cwd ? { cwd: input.context.session.cwd } : {}),
     ...(input.binaryPath ? { pathToClaudeCodeExecutable: input.binaryPath } : {}),
-    permissionMode,
+    ...(permissionMode ? { permissionMode } : {}),
     ...(permissionMode === "bypassPermissions" ? { allowDangerouslySkipPermissions: true } : {}),
     ...(input.context.resumeSessionId ? { resume: input.context.resumeSessionId } : {}),
     ...(input.context.resumeSessionAt ? { resumeSessionAt: input.context.resumeSessionAt } : {}),
     ...(input.canUseTool ? { canUseTool: input.canUseTool } : {}),
+    includePartialMessages: true,
     ...(normalizedModelOptions?.thinking === false
       ? { thinking: { type: "disabled" as const } }
       : {}),
@@ -781,20 +783,18 @@ async function runLocalClaudeTurn(input: {
   readonly interactionMode?: "default" | "plan";
 }): Promise<void> {
   const assistantItemId = RuntimeItemId.makeUnsafe(crypto.randomUUID());
-  const canUseTool = !input.context.workspaceProxy
-    ? buildCanUseTool({
-        context: input.context,
-        turnId: input.turn.id,
-        runtimeEventQueue: input.runtime.runtimeEventQueue,
-      })
-    : undefined;
+  const canUseTool = buildCanUseTool({
+    context: input.context,
+    turnId: input.turn.id,
+    runtimeEventQueue: input.runtime.runtimeEventQueue,
+  });
 
   const queryOptions = buildClaudeQueryOptions({
     context: input.context,
     model: input.model,
     ...(input.modelOptions ? { modelOptions: input.modelOptions } : {}),
     ...(input.binaryPath ? { binaryPath: input.binaryPath } : {}),
-    ...(canUseTool ? { canUseTool } : {}),
+    canUseTool,
     ...(input.interactionMode ? { interactionMode: input.interactionMode } : {}),
   });
 

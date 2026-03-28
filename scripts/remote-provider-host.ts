@@ -155,6 +155,8 @@ export function buildRemoteProviderHostEnv(
 
   if (options.enableClaudeProvider) {
     env.OCICODE_ENABLE_CLAUDE_PROVIDER = "1";
+    delete env.ANTHROPIC_API_KEY;
+    delete env.ANTHROPIC_AUTH_TOKEN;
   } else {
     delete env.OCICODE_ENABLE_CLAUDE_PROVIDER;
   }

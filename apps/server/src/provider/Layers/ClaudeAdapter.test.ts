@@ -182,7 +182,8 @@ it.effect("maps Claude ultrathink to prompt injection and 1M beta in local mode"
     yield* Effect.promise(() => capturedPromptMessagesPromise);
 
     assert.deepStrictEqual(capturedOptions?.betas, [CLAUDE_CONTEXT_1M_BETA]);
-    assert.strictEqual(capturedOptions?.effort, undefined);
+    assert.strictEqual(capturedOptions?.effort, "high");
+    assert.strictEqual(capturedOptions?.includePartialMessages, true);
     assert.strictEqual(capturedPromptMessages.length, 1);
     assert.deepStrictEqual(capturedPromptMessages[0]?.message.content, [
       { type: "text", text: "Ultrathink:\nReview this diff" },
@@ -417,6 +418,274 @@ it.effect("handles local Claude AskUserQuestion prompts", () => {
     assert.deepEqual(resolvedEvent.payload.answers, {
       sandbox_mode: "workspace-write",
     });
+
+    yield* Fiber.interrupt(eventsFiber);
+    fs.rmSync(stateDir, { recursive: true, force: true });
+  }).pipe(Effect.provide(layer));
+});
+
+it.effect("keeps AskUserQuestion active for local-proxy Claude full-access sessions", () => {
+  const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "ocicode-claude-local-proxy-input-"));
+  let capturedPermissionResult!: PermissionResult;
+  let capturedOptions: Record<string, unknown> | undefined;
+  let resolveCapturedPermissionResult!: (result: PermissionResult) => void;
+  const capturedPermissionResultPromise = new Promise<PermissionResult>((resolve) => {
+    resolveCapturedPermissionResult = resolve;
+  });
+
+  const layer = makeTestLayer({
+    stateDir,
+    createQuery: ({ options }) => {
+      capturedOptions = options;
+      const canUseTool = options.canUseTool as CanUseTool | undefined;
+      const iterator = (async function* () {
+        if (!canUseTool) {
+          throw new Error("Expected Claude canUseTool callback");
+        }
+
+        const permissionResult = await canUseTool(
+          "AskUserQuestion",
+          {
+            questions: [
+              {
+                id: "sandbox_mode",
+                header: "Sandbox",
+                question: "Which mode should be used?",
+                options: [
+                  {
+                    label: "workspace-write",
+                    description: "Allow workspace writes only",
+                  },
+                ],
+              },
+            ],
+          },
+          { signal: new AbortController().signal, toolUseID: "tool-use-local-proxy-1" },
+        );
+        capturedPermissionResult = permissionResult;
+        resolveCapturedPermissionResult(permissionResult);
+
+        yield {
+          type: "result",
+          subtype: "success",
+          is_error: false,
+          duration_ms: 1,
+          duration_api_ms: 1,
+          num_turns: 1,
+          stop_reason: null,
+          session_id: "session-local-proxy-1",
+          total_cost_usd: 0,
+          usage: {},
+          modelUsage: {},
+          permission_denials: [],
+          uuid: "result-local-proxy-1",
+          result: "",
+        } as unknown as SDKMessage;
+      })();
+
+      return Object.assign(iterator, makeFakeQuery([]));
+    },
+  });
+
+  return Effect.gen(function* () {
+    const adapter = yield* ClaudeAdapter;
+    const threadId = asThreadId("thread-claude-local-proxy-input");
+    const emittedEvents: ProviderRuntimeEvent[] = [];
+    const eventsFiber = yield* Stream.runForEach(adapter.streamEvents, (event) =>
+      Effect.sync(() => {
+        emittedEvents.push(event);
+      }),
+    ).pipe(Effect.forkChild);
+
+    yield* adapter.startSession({
+      provider: "claudeAgent",
+      threadId,
+      model: "claude-sonnet-4-6",
+      runtimeMode: "full-access",
+      providerOptions: {
+        claudeAgent: {
+          remote: {
+            workspaceProxyMode: "local-proxy",
+          },
+        },
+      },
+    });
+
+    yield* adapter.sendTurn({
+      threadId,
+      input: "Need user input",
+      model: "claude-sonnet-4-6",
+      attachments: [],
+    });
+
+    assert.strictEqual(capturedOptions?.includePartialMessages, true);
+    assert.strictEqual(capturedOptions?.permissionMode, undefined);
+    assert.strictEqual(capturedOptions?.allowDangerouslySkipPermissions, undefined);
+
+    const requestedEvent = yield* Effect.promise(() =>
+      waitForValue(
+        () =>
+          emittedEvents.find((event) => event.type === "user-input.requested") as
+            | Extract<ProviderRuntimeEvent, { type: "user-input.requested" }>
+            | undefined,
+      ),
+    );
+
+    assert.equal(requestedEvent.payload.questions[0]?.id, "sandbox_mode");
+    if (!requestedEvent.requestId) {
+      throw new Error("Expected Claude user-input.requested event to include requestId");
+    }
+
+    yield* adapter.respondToUserInput(
+      threadId,
+      ApprovalRequestId.makeUnsafe(requestedEvent.requestId),
+      {
+        sandbox_mode: "workspace-write",
+      },
+    );
+
+    const permissionResult = yield* Effect.promise(() => capturedPermissionResultPromise);
+    assert.deepEqual(capturedPermissionResult, permissionResult);
+    assert.deepEqual(permissionResult, {
+      behavior: "allow",
+      updatedInput: {
+        questions: [
+          {
+            id: "sandbox_mode",
+            header: "Sandbox",
+            question: "Which mode should be used?",
+            options: [
+              {
+                label: "workspace-write",
+                description: "Allow workspace writes only",
+              },
+            ],
+          },
+        ],
+        answers: {
+          sandbox_mode: "workspace-write",
+        },
+      },
+    });
+
+    yield* Fiber.interrupt(eventsFiber);
+    fs.rmSync(stateDir, { recursive: true, force: true });
+  }).pipe(Effect.provide(layer));
+});
+
+it.effect("surfaces approval requests for local-proxy Claude approval-required sessions", () => {
+  const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "ocicode-claude-local-proxy-approval-"));
+  let capturedPermissionResult!: PermissionResult;
+  let resolveCapturedPermissionResult!: (result: PermissionResult) => void;
+  const capturedPermissionResultPromise = new Promise<PermissionResult>((resolve) => {
+    resolveCapturedPermissionResult = resolve;
+  });
+
+  const layer = makeTestLayer({
+    stateDir,
+    createQuery: ({ options }) => {
+      const canUseTool = options.canUseTool as CanUseTool | undefined;
+      const iterator = (async function* () {
+        if (!canUseTool) {
+          throw new Error("Expected Claude canUseTool callback");
+        }
+
+        const permissionResult = await canUseTool(
+          "Bash",
+          { command: "pwd" },
+          { signal: new AbortController().signal, toolUseID: "tool-use-local-proxy-2" },
+        );
+        capturedPermissionResult = permissionResult;
+        resolveCapturedPermissionResult(permissionResult);
+
+        yield {
+          type: "result",
+          subtype: "success",
+          is_error: false,
+          duration_ms: 1,
+          duration_api_ms: 1,
+          num_turns: 1,
+          stop_reason: null,
+          session_id: "session-local-proxy-2",
+          total_cost_usd: 0,
+          usage: {},
+          modelUsage: {},
+          permission_denials: [],
+          uuid: "result-local-proxy-2",
+          result: "",
+        } as unknown as SDKMessage;
+      })();
+
+      return Object.assign(iterator, makeFakeQuery([]));
+    },
+  });
+
+  return Effect.gen(function* () {
+    const adapter = yield* ClaudeAdapter;
+    const threadId = asThreadId("thread-claude-local-proxy-approval");
+    const emittedEvents: ProviderRuntimeEvent[] = [];
+    const eventsFiber = yield* Stream.runForEach(adapter.streamEvents, (event) =>
+      Effect.sync(() => {
+        emittedEvents.push(event);
+      }),
+    ).pipe(Effect.forkChild);
+
+    yield* adapter.startSession({
+      provider: "claudeAgent",
+      threadId,
+      model: "claude-sonnet-4-6",
+      runtimeMode: "approval-required",
+      providerOptions: {
+        claudeAgent: {
+          remote: {
+            workspaceProxyMode: "local-proxy",
+          },
+        },
+      },
+    });
+
+    yield* adapter.sendTurn({
+      threadId,
+      input: "Run a command",
+      model: "claude-sonnet-4-6",
+      attachments: [],
+    });
+
+    const requestedEvent = yield* Effect.promise(() =>
+      waitForValue(
+        () =>
+          emittedEvents.find((event) => event.type === "request.opened") as
+            | Extract<ProviderRuntimeEvent, { type: "request.opened" }>
+            | undefined,
+      ),
+    );
+
+    assert.equal(requestedEvent.payload.requestType, "command_execution_approval");
+    if (!requestedEvent.requestId) {
+      throw new Error("Expected Claude request.opened event to include requestId");
+    }
+
+    yield* adapter.respondToRequest(
+      threadId,
+      ApprovalRequestId.makeUnsafe(requestedEvent.requestId),
+      "accept",
+    );
+
+    const permissionResult = yield* Effect.promise(() => capturedPermissionResultPromise);
+    assert.deepEqual(capturedPermissionResult, permissionResult);
+    assert.deepEqual(permissionResult, {
+      behavior: "allow",
+    });
+
+    const resolvedEvent = yield* Effect.promise(() =>
+      waitForValue(
+        () =>
+          emittedEvents.find((event) => event.type === "request.resolved") as
+            | Extract<ProviderRuntimeEvent, { type: "request.resolved" }>
+            | undefined,
+      ),
+    );
+    assert.equal(resolvedEvent.payload.decision, "accept");
 
     yield* Fiber.interrupt(eventsFiber);
     fs.rmSync(stateDir, { recursive: true, force: true });
