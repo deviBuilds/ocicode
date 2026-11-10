@@ -1,28 +1,48 @@
 import {
-  PanelBottomIcon,
-  PanelRightIcon,
-  SquareMenuIcon,
+  EllipsisIcon,
+  FileDiffIcon,
+  FolderIcon,
+  GlobeIcon,
+  ListIcon,
   Maximize2Icon,
+  MessagesSquareIcon,
   Minimize2Icon,
+  PanelRightIcon,
+  SmartphoneIcon,
+  TerminalIcon,
+  type LucideIcon,
 } from "lucide-react";
-import { useGT } from "gt-react";
+import { T, useGT } from "gt-react";
+import { PullRequestGlyph } from "~/components/pullRequest/pullRequestIcons";
 import { memo, type ReactNode, useLayoutEffect, useRef } from "react";
 
 import { cn } from "~/lib/utils";
 
 import type { ThreadPanelPresentation } from "../../rightPanelLayout";
+import { Button } from "../ui/button";
+import {
+  Menu,
+  MenuItem,
+  MenuItemLabel,
+  MenuPopup,
+  MenuSeparator,
+  MenuShortcut,
+  MenuTrigger,
+} from "../ui/menu";
 import { PopoverCreateHandle, PopoverTrigger } from "../ui/popover";
 import { useMobileSidebarSheetMounted } from "../ui/sidebar";
 import { Toggle } from "../ui/toggle";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 
-/** Matches the right inset of `ThreadPanelHeaderControl`. */
+/** Matches the right inset of `ChatHeaderPanelControls`. */
 const THREAD_PANEL_HEADER_INSET_PX = 12;
 
 export interface PanelLayoutControlsProps {
   showThreadPanelControl?: boolean;
   showTerminalControl?: boolean;
   showRightPanelControl?: boolean;
+  /** Direct surface buttons, placed after the terminal toggle. */
+  surfaceControls?: ReactNode;
   terminalAvailable: boolean;
   terminalOpen: boolean;
   terminalShortcutLabel: string | null;
@@ -43,6 +63,7 @@ export const PanelLayoutControls = memo(function PanelLayoutControls({
   showThreadPanelControl = true,
   showTerminalControl = true,
   showRightPanelControl = true,
+  surfaceControls,
   terminalAvailable,
   terminalOpen,
   terminalShortcutLabel,
@@ -68,7 +89,7 @@ export const PanelLayoutControls = memo(function PanelLayoutControls({
       variant="ghost"
       size="sm"
     >
-      <SquareMenuIcon className="size-4" />
+      <ListIcon className="size-4" />
     </Toggle>
   );
   const threadPanelControl = (
@@ -101,23 +122,24 @@ export const PanelLayoutControls = memo(function PanelLayoutControls({
               className="shrink-0 [-webkit-app-region:no-drag]"
               pressed={terminalOpen}
               onPressedChange={onToggleTerminal}
-              aria-label={gt("Toggle terminal drawer")}
+              aria-label={gt("Toggle terminal")}
               variant="ghost"
               size="sm"
               disabled={!terminalAvailable}
             >
-              <PanelBottomIcon className="size-4" />
+              <TerminalIcon className="size-4" />
             </Toggle>
           </TooltipTrigger>
           <TooltipPopup side="bottom">
             {terminalAvailable
               ? terminalShortcutLabel
-                ? gt("Toggle terminal drawer ({shortcut})", { shortcut: terminalShortcutLabel })
-                : gt("Toggle terminal drawer")
-              : gt("Terminal drawer is unavailable")}
+                ? gt("Toggle terminal ({shortcut})", { shortcut: terminalShortcutLabel })
+                : gt("Toggle terminal")
+              : gt("Terminal is unavailable")}
           </TooltipPopup>
         </Tooltip>
       ) : null}
+      {surfaceControls}
       {showRightPanelControl ? (
         <Tooltip>
           <TooltipTrigger render={<span className="flex shrink-0" />}>
@@ -144,6 +166,168 @@ export const PanelLayoutControls = memo(function PanelLayoutControls({
         </Tooltip>
       ) : null}
     </div>
+  );
+});
+
+export interface PanelSurfaceControlsProps {
+  diffAvailable: boolean;
+  diffOpen: boolean;
+  diffShortcutLabel: string | null;
+  onToggleDiff: () => void;
+  browserAvailable: boolean;
+  browserOpen: boolean;
+  onToggleBrowser: () => void;
+  filesAvailable: boolean;
+  filesOpen: boolean;
+  onToggleFiles: () => void;
+  sideChatAvailable: boolean;
+  onOpenSideChat: (() => void) | undefined;
+  deviceAvailable: boolean;
+  onOpenDevice: () => void;
+  pullRequestAvailable: boolean;
+  onOpenPullRequest: () => void;
+  pullRequestsAvailable: boolean;
+  onOpenPullRequests: () => void;
+  rightPanelAvailable: boolean;
+  rightPanelOpen: boolean;
+  rightPanelShortcutLabel: string | null;
+  onToggleRightPanel: () => void;
+}
+
+function SurfaceToggle(props: {
+  label: string;
+  toggleLabel: string;
+  unavailableLabel: string;
+  shortcutLabel?: string | null;
+  icon: LucideIcon;
+  available: boolean;
+  open: boolean;
+  onToggle: () => void;
+}) {
+  const Icon = props.icon;
+  return (
+    <Tooltip>
+      <TooltipTrigger render={<span className="flex shrink-0" />}>
+        <Toggle
+          className="shrink-0 [-webkit-app-region:no-drag]"
+          pressed={props.open}
+          onPressedChange={props.onToggle}
+          aria-label={props.toggleLabel}
+          variant="ghost"
+          size="sm"
+          disabled={!props.available}
+        >
+          <Icon className="size-4" />
+        </Toggle>
+      </TooltipTrigger>
+      <TooltipPopup side="bottom">
+        {props.available
+          ? props.shortcutLabel
+            ? `${props.label} (${props.shortcutLabel})`
+            : props.label
+          : props.unavailableLabel}
+      </TooltipPopup>
+    </Tooltip>
+  );
+}
+
+/** One button per everyday surface; the rest, and the whole-panel toggle, sit under More. */
+export const PanelSurfaceControls = memo(function PanelSurfaceControls(
+  props: PanelSurfaceControlsProps,
+) {
+  const gt = useGT();
+  return (
+    <>
+      <SurfaceToggle
+        label={gt("Diff")}
+        toggleLabel={gt("Toggle diff")}
+        unavailableLabel={gt("Diff is unavailable")}
+        shortcutLabel={props.diffShortcutLabel}
+        icon={FileDiffIcon}
+        available={props.diffAvailable}
+        open={props.diffOpen}
+        onToggle={props.onToggleDiff}
+      />
+      <SurfaceToggle
+        label={gt("Browser")}
+        toggleLabel={gt("Toggle browser")}
+        unavailableLabel={gt("Browser is unavailable")}
+        icon={GlobeIcon}
+        available={props.browserAvailable}
+        open={props.browserOpen}
+        onToggle={props.onToggleBrowser}
+      />
+      <SurfaceToggle
+        label={gt("Files")}
+        toggleLabel={gt("Toggle files")}
+        unavailableLabel={gt("Files are unavailable")}
+        icon={FolderIcon}
+        available={props.filesAvailable}
+        open={props.filesOpen}
+        onToggle={props.onToggleFiles}
+      />
+      <Menu>
+        <Tooltip>
+          <TooltipTrigger render={<span className="flex shrink-0" />}>
+            <MenuTrigger
+              render={
+                <Button
+                  aria-label={gt("More panels")}
+                  className="shrink-0 [-webkit-app-region:no-drag]"
+                  // Focus returns here when the right panel collapses.
+                  data-right-panel-toggle
+                  size="icon-sm"
+                  variant="ghost"
+                />
+              }
+            >
+              <EllipsisIcon className="size-4" />
+            </MenuTrigger>
+          </TooltipTrigger>
+          <TooltipPopup side="bottom">
+            <T>More panels</T>
+          </TooltipPopup>
+        </Tooltip>
+        <MenuPopup align="end" side="bottom" sideOffset={6}>
+          {props.onOpenSideChat ? (
+            <MenuItem disabled={!props.sideChatAvailable} onClick={props.onOpenSideChat}>
+              <MessagesSquareIcon />
+              <MenuItemLabel>
+                <T>Side chat</T>
+              </MenuItemLabel>
+            </MenuItem>
+          ) : null}
+          <MenuItem disabled={!props.deviceAvailable} onClick={props.onOpenDevice}>
+            <SmartphoneIcon />
+            <MenuItemLabel>
+              <T>Device</T>
+            </MenuItemLabel>
+          </MenuItem>
+          <MenuItem disabled={!props.pullRequestAvailable} onClick={props.onOpenPullRequest}>
+            <PullRequestGlyph.pullRequest />
+            <MenuItemLabel>
+              <T>Pull request</T>
+            </MenuItemLabel>
+          </MenuItem>
+          <MenuItem disabled={!props.pullRequestsAvailable} onClick={props.onOpenPullRequests}>
+            <PullRequestGlyph.link />
+            <MenuItemLabel>
+              <T>Linked pull requests</T>
+            </MenuItemLabel>
+          </MenuItem>
+          <MenuSeparator />
+          <MenuItem disabled={!props.rightPanelAvailable} onClick={props.onToggleRightPanel}>
+            <PanelRightIcon />
+            <MenuItemLabel>
+              {props.rightPanelOpen ? <T>Hide right panel</T> : <T>Show right panel</T>}
+            </MenuItemLabel>
+            {props.rightPanelShortcutLabel ? (
+              <MenuShortcut>{props.rightPanelShortcutLabel}</MenuShortcut>
+            ) : null}
+          </MenuItem>
+        </MenuPopup>
+      </Menu>
+    </>
   );
 });
 
@@ -181,8 +365,8 @@ export const RightPanelMaximizeControl = memo(function RightPanelMaximizeControl
   );
 });
 
-/** The thread panel toggle on a header whose right side the inline right panel covers. */
-export function ThreadPanelHeaderControl(props: PanelLayoutControlsProps) {
+/** The panel buttons at the end of the chat header, where they stay while panes fill the corner. */
+export function ChatHeaderPanelControls(props: { readonly children: ReactNode }) {
   const mobileSidebarSheetMounted = useMobileSidebarSheetMounted();
   return (
     <div
@@ -192,7 +376,7 @@ export function ThreadPanelHeaderControl(props: PanelLayoutControlsProps) {
       )}
       data-workspace-titlebar-controls
     >
-      <PanelLayoutControls {...props} showTerminalControl={false} showRightPanelControl={false} />
+      {props.children}
     </div>
   );
 }
@@ -214,11 +398,12 @@ export function WorkspaceTitlebarControls(props: {
     const { rightPanelOpen: wasOpen, maximized: wasMaximized } = previous.current;
     previous.current = { rightPanelOpen, maximized };
     if (!wasOpen || rightPanelOpen || wasMaximized) return;
-    const toggle = controlsRef.current?.querySelector("[data-thread-panel-toggle]");
+    // In this build the whole button group sat at the header's end, not only the details toggle.
+    const toggle = controlsRef.current?.querySelector("[data-panel-layout-controls]");
     const panel = toggle?.ownerDocument.querySelector("[data-preview-panel-mode='inline']");
     const timing = panel?.getAnimations()[0]?.effect?.getTiming();
     if (!toggle || !panel || !timing) return;
-    // The header's toggle was just removed, so slide this one in from where it sat.
+    // The header's buttons were just removed, so slide these in from where they sat.
     const headerRight = panel.getBoundingClientRect().left - THREAD_PANEL_HEADER_INSET_PX;
     const offset = headerRight - toggle.getBoundingClientRect().right;
     const animation = toggle.animate(

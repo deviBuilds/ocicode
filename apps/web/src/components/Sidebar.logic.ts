@@ -54,7 +54,7 @@ import { isPreviewFocused } from "../lib/previewFocus";
 import { isModelPickerOpen, subscribeToModelPickerVisibility } from "../modelPickerVisibility";
 import { shortcutModifierStore } from "../shortcutModifierState";
 import { selectThreadTerminalUiState, useTerminalUiStateStore } from "../terminalUiStateStore";
-import { selectActiveRightPanel, useRightPanelStore } from "../rightPanelStore";
+import { selectRightPanelPaneShowing, useRightPanelStore } from "../rightPanelStore";
 
 export function shouldNavigateAfterThreadPark(input: {
   readonly threadKey: string;
@@ -669,9 +669,11 @@ export function threadShortcutContext(routeThreadRef: ScopedThreadRef | null) {
         routeThreadRef,
       ).terminalOpen,
     previewFocus: isPreviewFocused(),
-    previewOpen:
-      selectActiveRightPanel(useRightPanelStore.getState().byThreadKey, routeThreadRef) ===
-      "preview",
+    previewOpen: selectRightPanelPaneShowing(
+      useRightPanelStore.getState().byThreadKey,
+      routeThreadRef,
+      "browser",
+    ),
     modelPickerOpen: isModelPickerOpen(),
     isWeb: !isElectron,
     isDesktop: isElectron,
