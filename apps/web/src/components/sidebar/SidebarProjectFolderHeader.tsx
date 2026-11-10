@@ -1,4 +1,5 @@
 import type { EnvironmentThreadShell } from "@t3tools/client-runtime/state/models";
+import type { EnvironmentId, EnvironmentMachineKind } from "@t3tools/contracts";
 import { scopedThreadKey, scopeThreadRef } from "@t3tools/client-runtime/environment";
 import { ChevronDownIcon, SquarePenIcon } from "lucide-react";
 import { memo } from "react";
@@ -7,6 +8,7 @@ import { cn } from "~/lib/utils";
 import type { SidebarProjectSnapshot } from "../../sidebarProjectGrouping";
 import { useUiStateStore } from "../../uiStateStore";
 import { resolveSidebarFolderDot, resolveThreadLastVisitedAt } from "../Sidebar.logic";
+import { ProjectEnvironmentBadge } from "../ProjectEnvironmentBadge";
 import { ProjectFavicon } from "../ProjectFavicon";
 import { Button } from "../ui/button";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
@@ -39,6 +41,9 @@ export const SidebarProjectFolderHeader = memo(function SidebarProjectFolderHead
   group: SidebarProjectSnapshot;
   collapsed: boolean;
   hiddenThreads: readonly EnvironmentThreadShell[];
+  /** Null while every project is on one machine, so no folder needs telling apart. */
+  machineByEnvironmentId: ReadonlyMap<EnvironmentId, EnvironmentMachineKind> | null;
+  primaryEnvironmentId: EnvironmentId | null;
   onToggle: (group: SidebarProjectSnapshot) => void;
   onNewThread: (group: SidebarProjectSnapshot) => void;
   onContextMenu: (group: SidebarProjectSnapshot, position: { x: number; y: number }) => void;
@@ -76,8 +81,18 @@ export const SidebarProjectFolderHeader = memo(function SidebarProjectFolderHead
         className="flex h-8 w-full cursor-pointer items-center gap-2.5 rounded-(--control-radius) px-(--sidebar-row-content-inset) text-left outline-none hover:bg-sidebar-row-hover focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
       >
         <ProjectFavicon project={group} className="size-4 shrink-0" />
-        <span className="min-w-0 flex-1 truncate text-sm font-medium text-sidebar-foreground/90">
-          {group.displayName}
+        <span className="flex min-w-0 flex-1 items-center gap-1.5">
+          <span className="min-w-0 truncate text-sm font-medium text-sidebar-foreground/90">
+            {group.displayName}
+          </span>
+          {/* Scratch rows already name their machine. */}
+          {props.machineByEnvironmentId && !group.isScratch ? (
+            <ProjectEnvironmentBadge
+              group={group}
+              primaryEnvironmentId={props.primaryEnvironmentId}
+              machineByEnvironmentId={props.machineByEnvironmentId}
+            />
+          ) : null}
         </span>
         {dot ? (
           <span className={cn("size-1.5 shrink-0 rounded-full", FOLDER_DOT_CLASS_NAME[dot])}>
