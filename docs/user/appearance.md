@@ -23,11 +23,11 @@ of the selected theme.
 
 ## Composer context
 
-Git-backed projects show branch and worktree controls below the composer while you create a thread.
-The controls retreat as the composer docks after you send the first message.
+Git-backed projects show branch and worktree controls below the composer, while you create a thread
+and after it starts.
 
-Turn on **Composer context** to keep those controls visible after the thread starts. This preference
-applies to the web and desktop clients.
+Turn off **Composer context** to have the controls retreat as the composer docks after you send the
+first message. This preference applies to the web and desktop clients.
 
 ## Math
 
