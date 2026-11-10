@@ -1,11 +1,27 @@
 import { appAtomRegistry } from "../rpc/atomRegistry";
 import { localEnvironmentIdAtom } from "../state/primaryEnvironment";
 import { themeServerSettingsAtom } from "../state/server";
-import { getThemeDefinition, singleAppearanceOf, subscribeToCustomThemes } from "../themePalette";
-import { getThemeSnapshot, setAppearanceMode, setTheme } from "./useTheme";
+import {
+  BUILD_DEFAULT_THEME,
+  getCustomThemes,
+  getThemeDefinition,
+  installCustomTheme,
+  serializeThemeFile,
+  singleAppearanceOf,
+  subscribeToCustomThemes,
+  updateCustomTheme,
+} from "../themePalette";
+import {
+  getThemeSnapshot,
+  hasStoredThemeChoice,
+  refreshTheme,
+  setAppearanceMode,
+  setTheme,
+} from "./useTheme";
 
 const APPLIED_DEFAULT_THEME_STORAGE_PREFIX = "t3code:default-theme-applied:v2:";
 const APPLIED_DEFAULT_APPEARANCE_STORAGE_PREFIX = "t3code:default-appearance-applied:v1:";
+const SHIPPED_BUILD_DEFAULT_THEME_STORAGE_KEY = "t3code:build-default-theme-shipped:v1";
 
 /** Include set time so reasserting the same theme still applies. */
 export function defaultThemeGeneration(theme: string, setAt: string): string {
@@ -109,6 +125,55 @@ function adoptDefaults(): void {
   adoptDefaultAppearance();
 }
 
+/** The installed copy follows a new build's palette only while it still matches what a build installed. */
+export function buildDefaultThemeNeedsUpdate(input: {
+  readonly installed: string | null;
+  readonly lastShipped: string | null;
+  readonly shipped: string;
+}): boolean {
+  return (
+    input.installed !== null &&
+    input.installed === input.lastShipped &&
+    input.lastShipped !== input.shipped
+  );
+}
+
+function updateBuildDefaultTheme(): void {
+  if (typeof window === "undefined") return;
+  try {
+    const installed = getCustomThemes().find((theme) => theme.id === BUILD_DEFAULT_THEME.id);
+    const shipped = serializeThemeFile(BUILD_DEFAULT_THEME);
+    const needsUpdate = buildDefaultThemeNeedsUpdate({
+      installed: installed ? serializeThemeFile(installed) : null,
+      lastShipped: window.localStorage.getItem(SHIPPED_BUILD_DEFAULT_THEME_STORAGE_KEY),
+      shipped,
+    });
+    if (!needsUpdate) return;
+    updateCustomTheme(BUILD_DEFAULT_THEME);
+    window.localStorage.setItem(SHIPPED_BUILD_DEFAULT_THEME_STORAGE_KEY, shipped);
+    refreshTheme();
+  } catch {}
+}
+
+/** A browser with no theme choice yet starts on the theme this build ships; any later choice sticks. */
+function adoptBuildDefaultTheme(): void {
+  if (hasStoredThemeChoice()) return;
+  try {
+    if (getThemeDefinition(BUILD_DEFAULT_THEME.id) === null) {
+      installCustomTheme(BUILD_DEFAULT_THEME);
+      window.localStorage.setItem(
+        SHIPPED_BUILD_DEFAULT_THEME_STORAGE_KEY,
+        serializeThemeFile(BUILD_DEFAULT_THEME),
+      );
+    }
+  } catch {
+    return;
+  }
+  if (!setTheme(BUILD_DEFAULT_THEME.id)) return;
+  const half = singleAppearanceOf(BUILD_DEFAULT_THEME);
+  if (half !== null) setAppearanceMode(half);
+}
+
 /**
  * Applies the theme environment's default theme once per generation. Start it after the
  * environment theme sync so a first-run client adopting the environment's own theme finds it
@@ -121,6 +186,9 @@ export function startDefaultThemeAdoption(): () => void {
     appAtomRegistry.subscribe(themeServerSettingsAtom, adoptDefaults),
     subscribeToCustomThemes(adoptDefaults),
   ];
+  updateBuildDefaultTheme();
+  // Before the environment defaults, so ones that are set still win.
+  adoptBuildDefaultTheme();
   adoptDefaults();
   return () => {
     for (const unsubscribe of unsubscribes) unsubscribe();

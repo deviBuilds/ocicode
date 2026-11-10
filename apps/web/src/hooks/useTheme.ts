@@ -184,6 +184,19 @@ function writeAppearanceModePreference(appearanceMode: ThemePreferenceMode): voi
   }
 }
 
+/** False until this browser stores a theme, a light or dark mode, or a mix. */
+export function hasStoredThemeChoice(): boolean {
+  if (typeof window === "undefined") return false;
+  try {
+    return [STORAGE_KEY, THEME_APPEARANCE_MODE_STORAGE_KEY, THEME_HALVES_STORAGE_KEY].some(
+      (key) => window.localStorage.getItem(key) !== null,
+    );
+  } catch {
+    // Unreadable storage cannot record the adoption, so treat it as already chosen.
+    return true;
+  }
+}
+
 export function readThemePreference(): Theme {
   if (typeof window === "undefined") return DEFAULT_THEME_SNAPSHOT.theme;
   let raw: string | null;

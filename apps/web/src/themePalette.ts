@@ -30,6 +30,7 @@ import {
   type ContextChipAccentKind,
 } from "./lib/contextChipAccents";
 
+import buildDefaultThemeFile from "./buildDefaultTheme.json";
 import { m } from "./i18n/messages";
 import { appAtomRegistry, subscribeAtomChanges } from "./rpc/atomRegistry";
 import { applyThemeBackground } from "./themeBackground";
@@ -1241,8 +1242,9 @@ export function getThemeDefinition(theme: ThemePreference): ThemeDefinition | nu
 export function themeAllowsSidebarArtwork(theme: ThemePreference): boolean {
   const themeId = themeIdFromPreference(theme);
   return (
+    themeId === BUILD_DEFAULT_THEME.id ||
     BUILT_IN_THEME_DEFINITIONS.find((definition) => definition.id === themeId)?.sidebarArtwork ===
-    true
+      true
   );
 }
 
@@ -1633,6 +1635,9 @@ export function renameTheme(theme: ThemeDefinition, name: string): ThemeDefiniti
     ...(theme.css ? { css: theme.css } : {}),
   });
 }
+
+/** The theme this build starts on. It keeps sidebar artwork, like the built-in themes. */
+export const BUILD_DEFAULT_THEME = parseThemeFile(buildDefaultThemeFile);
 
 export function serializeThemeFile(theme: ThemeDefinition): string {
   const canonicalTheme = canonicalizeThemeDefinition(theme);
