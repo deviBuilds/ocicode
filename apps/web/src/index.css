@@ -904,6 +904,20 @@ html[data-mobile-composer-route-transition="true"]::view-transition-old(t3-mobil
     --stage-night-line: color-mix(in oklch, var(--stage-art-line) 82%, oklch(1 0 0));
   }
 
+  /* buildDefaultTheme.json is neutral grey, so its night sky trades the purple for a warm dusk. */
+  html[data-theme-id="ovx-theme-a72fc5d5769c"] {
+    --stage-night-top: oklch(0.284 0.03 50);
+    --stage-night-mid: oklch(0.235 0.022 55);
+    --stage-night-bottom: oklch(0.2 0.012 60);
+    --stage-night-highlight: oklch(0.72 0.06 65);
+    --stage-night-secondary: oklch(0.58 0.07 50);
+    --stage-night-tertiary: oklch(0.56 0.09 38);
+    --stage-night-line: oklch(0.94 0.02 85);
+    --stage-night-glow-highlight: oklch(0.56 0.1 48);
+    --stage-night-glow-secondary: oklch(0.36 0.06 48);
+    --stage-night-sparkle: oklch(0.89 0.04 75);
+  }
+
   :is(
     html[data-theme-id="t3-chat"],
     html[data-theme-id="grove"],
