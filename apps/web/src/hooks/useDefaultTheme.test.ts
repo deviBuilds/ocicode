@@ -1,6 +1,12 @@
 import { describe, expect, it } from "vite-plus/test";
 
-import { defaultThemeGeneration, defaultThemeToApply } from "./useDefaultTheme";
+import buildDefaultThemeFile from "../buildDefaultTheme.json";
+import { BUILD_DEFAULT_THEME, THEME_COLOR_ROLES } from "../themePalette";
+import {
+  buildDefaultThemeNeedsUpdate,
+  defaultThemeGeneration,
+  defaultThemeToApply,
+} from "./useDefaultTheme";
 
 const BASE = {
   environmentId: "env-1",
@@ -25,5 +31,42 @@ describe("default theme adoption", () => {
     });
     expect(next).not.toBe(null);
     expect(next).not.toBe(applied);
+  });
+
+  it("ships a build default that sets every color itself", () => {
+    expect(Object.keys(buildDefaultThemeFile.colors).toSorted()).toEqual(
+      [...THEME_COLOR_ROLES].toSorted(),
+    );
+    expect(BUILD_DEFAULT_THEME.colors.canvas).toBe(buildDefaultThemeFile.colors.canvas);
+  });
+
+  it.each([
+    {
+      name: "an untouched copy follows a new build",
+      installed: "v1",
+      lastShipped: "v1",
+      update: true,
+    },
+    { name: "an edited copy is kept", installed: "edited", lastShipped: "v1", update: false },
+    {
+      name: "a copy no build installed is kept",
+      installed: "v1",
+      lastShipped: null,
+      update: false,
+    },
+    {
+      name: "a removed copy is not reinstalled",
+      installed: null,
+      lastShipped: "v1",
+      update: false,
+    },
+    {
+      name: "the current palette is left alone",
+      installed: "v2",
+      lastShipped: "v2",
+      update: false,
+    },
+  ])("$name", ({ installed, lastShipped, update }) => {
+    expect(buildDefaultThemeNeedsUpdate({ installed, lastShipped, shipped: "v2" })).toBe(update);
   });
 });
