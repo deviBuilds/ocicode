@@ -37,9 +37,15 @@ import { horizontalListSortingStrategy, SortableContext, useSortable } from "@dn
 import { CSS } from "@dnd-kit/utilities";
 import {
   Smartphone,
+  ArrowDown,
+  ArrowLeft,
+  ArrowRight,
+  ArrowUp,
   ChevronDown,
   ChevronLeft,
   ChevronRight,
+  EllipsisVertical,
+  EyeOff,
   FileDiff,
   Files,
   Globe2,
@@ -50,8 +56,10 @@ import {
   VolumeOffIcon,
 } from "lucide-react";
 import {
+  type CSSProperties,
   type KeyboardEvent as ReactKeyboardEvent,
   type MouseEvent as ReactMouseEvent,
+  type PointerEvent as ReactPointerEvent,
   type ReactElement,
   type ReactNode,
   useEffect,
@@ -63,6 +71,13 @@ import {
 import { isElectron } from "~/env";
 import type { DesktopPreviewOverlay } from "~/previewStateStore";
 import type { RightPanelSurface } from "~/rightPanelStore";
+import {
+  movedRightPanelPaneLayout,
+  type RightPanelPane,
+  type RightPanelPaneKind,
+  type RightPanelPaneMove,
+  type RightPanelPaneSizes,
+} from "~/rightPanelPanes";
 import { cn } from "~/lib/utils";
 import { resolveShortcutCommand, type ShortcutMatchContext } from "~/keybindings";
 import { readLocalApi } from "~/localApi";
@@ -75,6 +90,7 @@ import {
   Menu,
   MenuItem,
   MenuPopup,
+  MenuSeparator,
   MenuShortcut,
   MenuSub,
   MenuSubPopup,
@@ -156,7 +172,22 @@ export interface RightPanelTabsProps {
   /** Overrides the default reason while side chats are available but cannot start. */
   sideChatDisabledReason?: string | null;
   pullRequestStatusSeeds?: Readonly<Record<string, PullRequestTabStatusSeed>>;
+  /** Set when this strip is one pane among several inside a shell its parent draws. */
+  pane?: RightPanelPaneFrame;
   children: ReactNode;
+}
+
+interface RightPanelPaneFrame {
+  /** The panel's top-left corner sits under the window controls of a collapsed sidebar. */
+  readonly topLeft: boolean;
+  /** The panel's top-right corner hosts the window's own controls. */
+  readonly topRight: boolean;
+  /** Only the focused pane answers panel-wide shortcuts. */
+  readonly focused: boolean;
+  readonly className: string;
+  readonly style: CSSProperties;
+  readonly controls: ReactNode;
+  readonly onFocus: () => void;
 }
 
 export interface PullRequestTabStatus {
@@ -219,6 +250,7 @@ type TabContextMenuAction =
   | "close-all";
 
 const TAB_SCROLL_EDGE_TOLERANCE = 1;
+const ADD_SURFACE_HOLD_MS = 450;
 const TAB_DRAG_MODIFIERS = [restrictToHorizontalAxis, restrictToFirstScrollableAncestor];
 
 function tabScrollViewport(root: HTMLDivElement | null): HTMLDivElement | null {
@@ -1030,11 +1062,17 @@ function RightPanelTab(
 
 export function RightPanelTabs(props: RightPanelTabsProps) {
   const focusedSurface = props.surfaces.find((surface) => surface.id === props.activeSurfaceId);
-  const ownsDesktopTitleBar = isElectron && props.mode === "inline";
+  const ownsDesktopTitleBar =
+    isElectron && props.mode === "inline" && (props.pane === undefined || props.pane.topRight);
+  const answersShortcuts = props.open !== false && props.pane?.focused !== false;
   const browserProfiles = useBrowserDefaults().profiles;
   const { resolvedTheme } = useTheme();
   const tabListRef = useRef<HTMLDivElement>(null);
   const addSurfaceTriggerRef = useRef<HTMLButtonElement>(null);
+  const addSurfacePressRef = useRef<{
+    holdTimer: ReturnType<typeof setTimeout> | null;
+    handled: boolean;
+  }>({ holdTimer: null, handled: false });
   const [renamingDevice, setRenamingDevice] = useState<string | null>(null);
   const [addSurfaceMenuOpen, setAddSurfaceMenuOpen] = useState(false);
   const [tabScrollState, setTabScrollState] = useState({
@@ -1063,10 +1101,10 @@ export function RightPanelTabs(props: RightPanelTabsProps) {
   });
   // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- subscribes a document keydown listener for the new surface shortcut while the panel is open
   useEffect(() => {
-    if (props.open === false) return;
+    if (!answersShortcuts) return;
     document.addEventListener("keydown", onNewSurfaceKeyDown, true);
     return () => document.removeEventListener("keydown", onNewSurfaceKeyDown, true);
-  }, [props.open]);
+  }, [answersShortcuts]);
 
   const updateTabScrollState = (viewport: HTMLDivElement) => {
     const hasOverflow = viewport.scrollWidth - viewport.clientWidth > TAB_SCROLL_EDGE_TOLERANCE;
@@ -1166,6 +1204,52 @@ export function RightPanelTabs(props: RightPanelTabsProps) {
         ]
       : []),
   ] as const;
+
+  // Beside a browser, terminal or files tab, "+" opens another of the same; holding it lists every surface.
+  const defaultAddAction =
+    addSurfaceActions.find(
+      (action) =>
+        action.available &&
+        action.label ===
+          (focusedSurface?.kind === "preview"
+            ? "Browser"
+            : focusedSurface?.kind === "terminal"
+              ? "Terminal"
+              : focusedSurface?.kind === "files" || focusedSurface?.kind === "file"
+                ? "Files"
+                : null),
+    ) ?? null;
+  const clearAddSurfaceHold = () => {
+    const press = addSurfacePressRef.current;
+    if (press.holdTimer !== null) clearTimeout(press.holdTimer);
+    press.holdTimer = null;
+  };
+  const handleAddSurfacePointerDown = (event: ReactPointerEvent) => {
+    if (!defaultAddAction || event.button !== 0) return;
+    const press = addSurfacePressRef.current;
+    // A press on the open menu's trigger only closes it.
+    press.handled = addSurfaceMenuOpen;
+    if (addSurfaceMenuOpen) return;
+    press.holdTimer = setTimeout(() => {
+      press.holdTimer = null;
+      press.handled = true;
+      setAddSurfaceMenuOpen(true);
+    }, ADD_SURFACE_HOLD_MS);
+  };
+  const handleAddSurfacePointerAway = () => {
+    clearAddSurfaceHold();
+    addSurfacePressRef.current.handled = false;
+  };
+  const handleAddSurfaceClick = () => {
+    if (!defaultAddAction) return;
+    clearAddSurfaceHold();
+    const press = addSurfacePressRef.current;
+    if (press.handled) {
+      press.handled = false;
+      return;
+    }
+    defaultAddAction.onClick();
+  };
 
   const handleAddSurfaceMenuKeyDown = (event: ReactKeyboardEvent<HTMLDivElement>) => {
     const action = surfaceShortcutActionForKey(addSurfaceActions, event.nativeEvent);
@@ -1322,36 +1406,18 @@ export function RightPanelTabs(props: RightPanelTabsProps) {
     };
   };
 
-  return (
-    <PreviewPanelShell
-      workspaceArea
-      workspaceFocusKey={`panel:${props.environmentId}:${props.activeSurfaceId ?? "empty"}`}
-      workspaceLabel={
-        focusedSurface
-          ? `Workspace panel: ${surfaceTitle(focusedSurface, props.previewSessions, props.terminalLabelsById)}`
-          : "Workspace panel"
-      }
-      mode={props.mode}
-      {...(props.maximized !== undefined ? { maximized: props.maximized } : {})}
-      {...(props.open !== undefined ? { open: props.open } : {})}
-      {...(props.widthStorageKey !== undefined ? { widthStorageKey: props.widthStorageKey } : {})}
-      {...(props.defaultWidth !== undefined ? { defaultWidth: props.defaultWidth } : {})}
-      {...(props.inlineSize ? { inlineSize: props.inlineSize } : {})}
-      onMouseDown={preventThumbButtonFocus}
-      onMouseUp={(event) =>
-        takeThumbButtonNavigation(
-          event,
-          focusedSurface?.kind === "preview" ? dispatchPreviewAction : undefined,
-        )
-      }
-    >
+  const body = (
+    <>
       <div
         className={cn(
           "flex h-[var(--workspace-topbar-height)] min-h-[var(--workspace-topbar-height)] shrink-0 items-center gap-1 pl-2",
-          props.mode === "inline" && !props.layoutControls ? "pr-28" : "pr-3",
+          props.mode === "inline" && !props.layoutControls && !props.pane ? "pr-28" : "pr-3",
           ownsDesktopTitleBar && "drag-region",
           ownsDesktopTitleBar && "wco:pr-(--workspace-native-controls-inset)",
-          props.mode === "inline" && props.maximized && COLLAPSED_SIDEBAR_TITLEBAR_INSET_CLASS,
+          props.mode === "inline" &&
+            props.maximized &&
+            (props.pane === undefined || props.pane.topLeft) &&
+            COLLAPSED_SIDEBAR_TITLEBAR_INSET_CLASS,
         )}
         data-right-panel-tabbar
       >
@@ -1405,7 +1471,14 @@ export function RightPanelTabs(props: RightPanelTabsProps) {
               })}
             </SortableTabList>
             {props.open !== false ? (
-              <Menu open={addSurfaceMenuOpen} onOpenChange={setAddSurfaceMenuOpen}>
+              <Menu
+                open={addSurfaceMenuOpen}
+                onOpenChange={(open, details) => {
+                  // The trigger's own press is a click or a hold here, read by the handlers below.
+                  if (open && defaultAddAction && details.reason === "trigger-press") return;
+                  setAddSurfaceMenuOpen(open);
+                }}
+              >
                 <MenuTrigger
                   ref={addSurfaceTriggerRef}
                   render={
@@ -1413,7 +1486,21 @@ export function RightPanelTabs(props: RightPanelTabsProps) {
                       aria-label="Add panel surface"
                       className="shrink-0"
                       size="icon-xs"
+                      title={
+                        defaultAddAction
+                          ? `New ${defaultAddAction.label.toLowerCase()} tab. Hold for all surfaces.`
+                          : undefined
+                      }
                       variant="ghost-muted"
+                      onClick={handleAddSurfaceClick}
+                      onContextMenu={(event) => {
+                        if (!defaultAddAction) return;
+                        event.preventDefault();
+                        setAddSurfaceMenuOpen(true);
+                      }}
+                      onPointerCancel={handleAddSurfacePointerAway}
+                      onPointerDown={handleAddSurfacePointerDown}
+                      onPointerLeave={handleAddSurfacePointerAway}
                     />
                   }
                 >
@@ -1524,6 +1611,7 @@ export function RightPanelTabs(props: RightPanelTabsProps) {
             </Tooltip>
           </div>
         ) : null}
+        {props.pane?.controls}
         {props.layoutControls}
         {ownsDesktopTitleBar && !props.layoutControls ? (
           <span aria-hidden className="hidden w-24 shrink-0 wco:block" />
@@ -1561,6 +1649,348 @@ export function RightPanelTabs(props: RightPanelTabsProps) {
         ) : (
           props.children
         )}
+      </div>
+    </>
+  );
+  if (props.pane) {
+    return (
+      <div
+        className={cn("flex min-h-0 min-w-0 flex-col", props.pane.className)}
+        style={props.pane.style}
+        data-right-panel-pane
+        onPointerDownCapture={props.pane.onFocus}
+      >
+        {body}
+      </div>
+    );
+  }
+  return (
+    <PreviewPanelShell
+      workspaceArea
+      workspaceFocusKey={`panel:${props.environmentId}:${props.activeSurfaceId ?? "empty"}`}
+      workspaceLabel={
+        focusedSurface
+          ? `Workspace panel: ${surfaceTitle(focusedSurface, props.previewSessions, props.terminalLabelsById)}`
+          : "Workspace panel"
+      }
+      mode={props.mode}
+      {...(props.maximized !== undefined ? { maximized: props.maximized } : {})}
+      {...(props.open !== undefined ? { open: props.open } : {})}
+      {...(props.widthStorageKey !== undefined ? { widthStorageKey: props.widthStorageKey } : {})}
+      {...(props.defaultWidth !== undefined ? { defaultWidth: props.defaultWidth } : {})}
+      {...(props.inlineSize ? { inlineSize: props.inlineSize } : {})}
+      onMouseDown={preventThumbButtonFocus}
+      onMouseUp={(event) =>
+        takeThumbButtonNavigation(
+          event,
+          focusedSurface?.kind === "preview" ? dispatchPreviewAction : undefined,
+        )
+      }
+    >
+      {body}
+    </PreviewPanelShell>
+  );
+}
+
+const PANE_MOVES = [
+  { move: "left", label: "Move left", icon: ArrowLeft },
+  { move: "right", label: "Move right", icon: ArrowRight },
+  { move: "up", label: "Move up", icon: ArrowUp },
+  { move: "down", label: "Move down", icon: ArrowDown },
+] as const satisfies ReadonlyArray<{ move: RightPanelPaneMove; label: string; icon: unknown }>;
+
+function RightPanelPaneMenu(props: {
+  layout: ReadonlyArray<ReadonlyArray<RightPanelPaneKind>>;
+  kind: RightPanelPaneKind;
+  onMove: (kind: RightPanelPaneKind, move: RightPanelPaneMove) => void;
+  onHide: (kind: RightPanelPaneKind) => void;
+}) {
+  return (
+    <Menu>
+      <MenuTrigger
+        render={
+          <Button
+            aria-label="Pane options"
+            className="shrink-0 [-webkit-app-region:no-drag]"
+            size="icon-xs"
+            variant="ghost-muted"
+          />
+        }
+      >
+        <EllipsisVertical className="size-3.5" />
+      </MenuTrigger>
+      <MenuPopup align="end" side="bottom" sideOffset={6}>
+        {PANE_MOVES.map(({ move, label, icon: Icon }) => (
+          <MenuItem
+            key={move}
+            disabled={movedRightPanelPaneLayout(props.layout, props.kind, move) === null}
+            onClick={() => props.onMove(props.kind, move)}
+          >
+            <Icon />
+            {label}
+          </MenuItem>
+        ))}
+        <MenuSeparator />
+        <MenuItem onClick={() => props.onHide(props.kind)}>
+          <EyeOff />
+          Hide pane
+        </MenuItem>
+      </MenuPopup>
+    </Menu>
+  );
+}
+
+const PANE_MIN_PX = { x: 220, y: 140 } as const;
+
+/** A drag line between two panes or columns; they trade flex share and their total stays put. */
+function RightPanelPaneDivider(props: {
+  axis: "x" | "y";
+  onResize: (before: number, after: number) => void;
+}) {
+  const dragRef = useRef<{
+    pointerId: number;
+    start: number;
+    before: HTMLElement;
+    after: HTMLElement;
+    beforePx: number;
+    totalPx: number;
+    totalShare: number;
+    shares: readonly [number, number] | null;
+  } | null>(null);
+  const shareOf = (element: HTMLElement) => Number.parseFloat(element.style.flexGrow) || 1;
+  const neighbours = (handle: HTMLElement) => {
+    const before = handle.previousElementSibling;
+    const after = handle.nextElementSibling;
+    return before instanceof HTMLElement && after instanceof HTMLElement ? { before, after } : null;
+  };
+  const finish = (event: ReactPointerEvent<HTMLElement>) => {
+    const drag = dragRef.current;
+    if (!drag || drag.pointerId !== event.pointerId) return;
+    dragRef.current = null;
+    if (drag.shares) props.onResize(...drag.shares);
+  };
+  return (
+    <div
+      role="separator"
+      aria-label="Resize panes"
+      aria-orientation={props.axis === "x" ? "vertical" : "horizontal"}
+      className={cn(
+        "group relative z-20 shrink-0 touch-none select-none",
+        props.axis === "x" ? "w-0 cursor-col-resize" : "h-0 cursor-row-resize",
+      )}
+      onDoubleClick={(event) => {
+        const pair = neighbours(event.currentTarget);
+        if (!pair) return;
+        const share = (shareOf(pair.before) + shareOf(pair.after)) / 2;
+        props.onResize(share, share);
+      }}
+      onPointerDown={(event) => {
+        const pair = event.button === 0 ? neighbours(event.currentTarget) : null;
+        if (!pair) return;
+        const size = (element: HTMLElement) =>
+          props.axis === "x"
+            ? element.getBoundingClientRect().width
+            : element.getBoundingClientRect().height;
+        event.currentTarget.setPointerCapture(event.pointerId);
+        event.preventDefault();
+        dragRef.current = {
+          pointerId: event.pointerId,
+          start: props.axis === "x" ? event.clientX : event.clientY,
+          ...pair,
+          beforePx: size(pair.before),
+          totalPx: size(pair.before) + size(pair.after),
+          totalShare: shareOf(pair.before) + shareOf(pair.after),
+          shares: null,
+        };
+      }}
+      onPointerMove={(event) => {
+        const drag = dragRef.current;
+        if (!drag || drag.pointerId !== event.pointerId) return;
+        const delta = (props.axis === "x" ? event.clientX : event.clientY) - drag.start;
+        const min = Math.min(PANE_MIN_PX[props.axis], drag.totalPx / 2);
+        const beforePx = Math.max(min, Math.min(drag.totalPx - min, drag.beforePx + delta));
+        const before = Math.round(((drag.totalShare * beforePx) / drag.totalPx) * 1000) / 1000;
+        const after = Math.round((drag.totalShare - before) * 1000) / 1000;
+        // Written straight to the DOM so a drag never re-renders the panes; release commits it.
+        drag.before.style.flexGrow = String(before);
+        drag.after.style.flexGrow = String(after);
+        drag.shares = [before, after];
+      }}
+      onPointerUp={finish}
+      onPointerCancel={finish}
+      onLostPointerCapture={finish}
+    >
+      <span
+        aria-hidden
+        className={cn(
+          "absolute",
+          props.axis === "x" ? "inset-y-0 -left-1 w-2" : "inset-x-0 -top-1 h-2",
+        )}
+      />
+      <span
+        aria-hidden
+        className={cn(
+          "pointer-events-none absolute bg-transparent transition-colors duration-150 group-hover:bg-primary/60 group-active:bg-primary/60",
+          props.axis === "x" ? "inset-y-0 left-0 w-px" : "inset-x-0 top-0 h-px",
+        )}
+      />
+    </div>
+  );
+}
+
+export interface RightPanelPanesProps extends Omit<RightPanelTabsProps, "pane"> {
+  /** Columns of showing panes. With none, the plain tab strip and `children` draw instead. */
+  panes: ReadonlyArray<ReadonlyArray<RightPanelPane>>;
+  paneSizes: RightPanelPaneSizes | undefined;
+  /** Drawn at the panel's top-right corner, after the last tab strip there. */
+  cornerControls: ReactNode;
+  onResizePanes: (sizes: RightPanelPaneSizes) => void;
+  renderPane: (surface: RightPanelSurface) => ReactNode;
+  onMovePane: (kind: RightPanelPaneKind, move: RightPanelPaneMove) => void;
+  onHidePane: (kind: RightPanelPaneKind) => void;
+}
+
+/** Every showing pane at once: columns side by side, panes stacked within a column. */
+export function RightPanelPanes(props: RightPanelPanesProps) {
+  const {
+    panes,
+    paneSizes,
+    cornerControls,
+    renderPane,
+    onMovePane,
+    onHidePane,
+    onResizePanes,
+    children,
+    ...tabs
+  } = props;
+  if (panes.length === 0) {
+    return (
+      <RightPanelTabs {...tabs} layoutControls={cornerControls}>
+        {children}
+      </RightPanelTabs>
+    );
+  }
+
+  const focusedSurface = tabs.surfaces.find((surface) => surface.id === tabs.activeSurfaceId);
+  const layout = panes.map((column) => column.map((pane) => pane.kind));
+  const moveSurface = tabs.onMoveSurface;
+  return (
+    <PreviewPanelShell
+      workspaceArea
+      workspaceFocusKey={`panel:${tabs.environmentId}:${tabs.activeSurfaceId ?? "empty"}`}
+      workspaceLabel={
+        focusedSurface
+          ? `Workspace panel: ${surfaceTitle(focusedSurface, tabs.previewSessions, tabs.terminalLabelsById)}`
+          : "Workspace panel"
+      }
+      mode={tabs.mode}
+      {...(tabs.maximized !== undefined ? { maximized: tabs.maximized } : {})}
+      {...(tabs.open !== undefined ? { open: tabs.open } : {})}
+      {...(tabs.widthStorageKey !== undefined ? { widthStorageKey: tabs.widthStorageKey } : {})}
+      {...(tabs.defaultWidth !== undefined ? { defaultWidth: tabs.defaultWidth } : {})}
+      {...(tabs.inlineSize ? { inlineSize: tabs.inlineSize } : {})}
+      onMouseDown={preventThumbButtonFocus}
+      onMouseUp={(event) =>
+        takeThumbButtonNavigation(
+          event,
+          focusedSurface?.kind === "preview" ? dispatchPreviewAction : undefined,
+        )
+      }
+    >
+      <div className="flex min-h-0 min-w-0 flex-1" data-right-panel-panes>
+        {panes.flatMap((column, columnIndex) => [
+          columnIndex === 0 ? null : (
+            <RightPanelPaneDivider
+              key={`divider:${column[0]!.kind}`}
+              axis="x"
+              onResize={(before, after) =>
+                onResizePanes({
+                  [panes[columnIndex - 1]![0]!.kind]: { width: before },
+                  [column[0]!.kind]: { width: after },
+                })
+              }
+            />
+          ),
+          <div
+            key={column[0]!.kind}
+            className={cn(
+              "flex min-h-0 min-w-0 basis-0 flex-col",
+              columnIndex > 0 && "border-l border-border",
+            )}
+            style={{ flexGrow: paneSizes?.[column[0]!.kind]?.width ?? 1 }}
+            data-right-panel-pane-column
+          >
+            {column.flatMap((pane, row) => {
+              const topRight = row === 0 && columnIndex === panes.length - 1;
+              const focused = pane.activeSurface.id === tabs.activeSurfaceId;
+              return [
+                row === 0 ? null : (
+                  <RightPanelPaneDivider
+                    key={`divider:${pane.kind}`}
+                    axis="y"
+                    onResize={(before, after) =>
+                      onResizePanes({
+                        [column[row - 1]!.kind]: { height: before },
+                        [pane.kind]: { height: after },
+                      })
+                    }
+                  />
+                ),
+                <RightPanelTabs
+                  key={pane.kind}
+                  {...tabs}
+                  surfaces={pane.surfaces}
+                  activeSurfaceId={pane.activeSurface.id}
+                  layoutControls={topRight ? cornerControls : undefined}
+                  onCloseOtherSurfaces={(surface) => {
+                    for (const other of pane.surfaces) {
+                      if (other.id !== surface.id) tabs.onCloseSurface(other);
+                    }
+                  }}
+                  onCloseSurfacesToRight={(surface) => {
+                    const index = pane.surfaces.findIndex((entry) => entry.id === surface.id);
+                    for (const other of pane.surfaces.slice(index + 1)) tabs.onCloseSurface(other);
+                  }}
+                  onCloseAllSurfaces={() => {
+                    for (const surface of pane.surfaces) tabs.onCloseSurface(surface);
+                  }}
+                  {...(moveSurface
+                    ? {
+                        // The strip counts within its pane; the store counts across every tab.
+                        onMoveSurface: (surfaceId: string, toIndex: number) => {
+                          const target = pane.surfaces[toIndex];
+                          const index = tabs.surfaces.findIndex(
+                            (surface) => surface.id === target?.id,
+                          );
+                          if (index >= 0) moveSurface(surfaceId, index);
+                        },
+                      }
+                    : {})}
+                  pane={{
+                    topLeft: row === 0 && columnIndex === 0,
+                    topRight,
+                    focused,
+                    className: cn("basis-0", row > 0 && "border-t border-border"),
+                    style: { flexGrow: paneSizes?.[pane.kind]?.height ?? 1 },
+                    controls: (
+                      <RightPanelPaneMenu
+                        layout={layout}
+                        kind={pane.kind}
+                        onMove={onMovePane}
+                        onHide={onHidePane}
+                      />
+                    ),
+                    onFocus: () => {
+                      if (!focused) tabs.onActivate(pane.activeSurface);
+                    },
+                  }}
+                >
+                  {renderPane(pane.activeSurface)}
+                </RightPanelTabs>,
+              ];
+            })}
+          </div>,
+        ])}
       </div>
     </PreviewPanelShell>
   );

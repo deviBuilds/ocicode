@@ -18,6 +18,7 @@ import {
   type RightPanelSurface,
   useRightPanelStore,
 } from "../../rightPanelStore";
+import type { RightPanelPaneKind, RightPanelPaneMove } from "../../rightPanelPanes";
 import { requestWorkspaceContentFocus, requestWorkspaceFocus } from "../../lib/workspaceFocus";
 import { setActivePreviewTab } from "../../previewStateStore";
 import { isBrowserSettingsReadError } from "../../browser/openFileInPreview";
@@ -59,6 +60,7 @@ interface RightPanelActionsInput {
   readonly activeProjectCwd: string | null;
   readonly onDiffPanelOpen: (() => void) | undefined;
   readonly closeRightPanelSurface: (surface: RightPanelSurface) => void;
+  readonly onAddTerminalSurface: () => void;
 }
 
 /**
@@ -91,21 +93,10 @@ export function useRightPanelActions(input: RightPanelActionsInput) {
     gitCwd,
     activeProjectCwd,
     onDiffPanelOpen,
+    onAddTerminalSurface,
   } = input;
 
   const openPreview = useAtomCommand(previewEnvironment.open, { reportFailure: false });
-  const onToggleDiff = () => {
-    if (!isServerThread) {
-      return;
-    }
-    if (!diffOpen) {
-      onDiffPanelOpen?.();
-    }
-    if (activeThreadRef) {
-      useRightPanelStore.getState().toggle(activeThreadRef, "diff");
-    }
-  };
-  const onToggleDiffStable = useStableCallback(onToggleDiff);
   const createBrowserSurface = (profileId?: string) => {
     if (!activeThreadRef || !canOperatePreview) return;
     void addBrowserSurface({
@@ -143,6 +134,24 @@ export function useRightPanelActions(input: RightPanelActionsInput) {
     useRightPanelStore.getState().open(activeThreadRef, "files");
   };
   const addFilesSurfaceStable = useStableCallback(addFilesSurface);
+  /** Shows or hides one pane beside the others, opening its first tab when it has none. */
+  const togglePane = (kind: RightPanelPaneKind) => {
+    if (!activeThreadRef) return;
+    if (kind === "diff" && !diffOpen) onDiffPanelOpen?.();
+    if (useRightPanelStore.getState().togglePane(activeThreadRef, kind)) return;
+    if (kind === "diff") addDiffSurface();
+    else if (kind === "browser") createBrowserSurface();
+    else if (kind === "files") addFilesSurface();
+    else if (kind === "terminal") onAddTerminalSurface();
+  };
+  const togglePaneStable = useStableCallback(togglePane);
+  const onToggleDiff = () => {
+    if (isServerThread) togglePane("diff");
+  };
+  const onToggleDiffStable = useStableCallback(onToggleDiff);
+  const movePaneStable = useStableCallback((kind: RightPanelPaneKind, move: RightPanelPaneMove) => {
+    if (activeThreadRef) useRightPanelStore.getState().movePane(activeThreadRef, kind, move);
+  });
   const addPullRequestsSurface = () => {
     if (!activeThreadRef || !pullRequestsSurfaceAvailable) return;
     useRightPanelStore.getState().open(activeThreadRef, "pull-requests");
@@ -343,6 +352,8 @@ export function useRightPanelActions(input: RightPanelActionsInput) {
     onToggleDiffStable,
     openChangesFromThreadPanelStable,
     openFileSurfaceStable,
+    movePaneStable,
+    togglePaneStable,
     toggleRightPanelMaximizedStable,
     toggleRightPanelStable,
     toggleThreadPanelStable,

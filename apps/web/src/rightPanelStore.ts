@@ -27,6 +27,18 @@ export type RightPanelKind = (typeof RIGHT_PANEL_KINDS)[number];
 
 export type PullRequestDetailTab = "summary" | "guide" | "timeline" | "code";
 
+import {
+  movedRightPanelPane,
+  resolveRightPanelPaneState,
+  RIGHT_PANEL_PANE_KINDS,
+  toggledRightPanelPane,
+  withRightPanelPaneState,
+  type RightPanelPaneKind,
+  type RightPanelPaneLayout,
+  type RightPanelPaneMove,
+  type RightPanelPaneSizes,
+} from "./rightPanelPanes";
+
 export interface DeviceTabTarget {
   hostId: string;
   deviceId: string;
@@ -97,6 +109,11 @@ export interface ThreadRightPanelState {
   dismissedDeviceSurfaceIds?: string[];
   maximized?: true;
   proactiveDiffTurnId?: RunId;
+  /** Showing panes when they differ from "only the focused tab's pane". */
+  paneLayout?: RightPanelPaneLayout;
+  /** The tab a pane rests on when it is not that pane's last one. */
+  paneActiveSurfaceIds?: Partial<Record<RightPanelPaneKind, string>>;
+  paneSizes?: RightPanelPaneSizes;
 }
 
 export interface ThreadPanelVisibility {
@@ -193,6 +210,10 @@ interface RightPanelStoreState {
     ref: ScopedThreadRef,
     kind: Exclude<RightPanelKind, "file" | "terminal" | "pull-request" | "side-chat">,
   ) => void;
+  /** Shows or hides one pane beside the others. False when it has no tab yet to show. */
+  togglePane: (ref: ScopedThreadRef, kind: RightPanelPaneKind) => boolean;
+  movePane: (ref: ScopedThreadRef, kind: RightPanelPaneKind, move: RightPanelPaneMove) => void;
+  resizePanes: (ref: ScopedThreadRef, sizes: RightPanelPaneSizes) => void;
   setThreadPanelOpen: (
     ref: ScopedThreadRef,
     presentation: ThreadPanelPresentation,
@@ -325,7 +346,7 @@ const updateThreadStateMap = (
   updater: (current: ThreadRightPanelState) => ThreadRightPanelState,
 ): Record<string, ThreadRightPanelState> => {
   const current = byThreadKey[threadKey] ?? EMPTY_THREAD_STATE;
-  const next = updater(current);
+  const next = withRightPanelPaneState(current, updater(current));
   if (
     !next.isOpen &&
     next.activeSurfaceId === null &&
@@ -482,6 +503,55 @@ function normalizeRevealLine(line: number | undefined): number | null {
   return Math.max(1, Math.trunc(line));
 }
 
+const isPaneKind = (value: unknown): value is RightPanelPaneKind =>
+  RIGHT_PANEL_PANE_KINDS.some((kind) => kind === value);
+
+/** Keeps well-formed pane choices; resolving them drops any that no longer match the tabs. */
+function persistedPaneState(
+  threadState: ThreadRightPanelState | null,
+): Pick<ThreadRightPanelState, "paneLayout" | "paneActiveSurfaceIds" | "paneSizes"> {
+  const layout: unknown = threadState?.paneLayout;
+  const active: unknown = threadState?.paneActiveSurfaceIds;
+  const sizes: unknown = threadState?.paneSizes;
+  const share = (value: unknown) =>
+    typeof value === "number" && Number.isFinite(value) && value > 0 ? value : undefined;
+  return {
+    ...(sizes !== null && typeof sizes === "object"
+      ? {
+          paneSizes: Object.fromEntries(
+            Object.entries(sizes).flatMap(([kind, size]) => {
+              if (!isPaneKind(kind) || size === null || typeof size !== "object") return [];
+              const width = share((size as { width?: unknown }).width);
+              const height = share((size as { height?: unknown }).height);
+              return [
+                [
+                  kind,
+                  {
+                    ...(width === undefined ? {} : { width }),
+                    ...(height === undefined ? {} : { height }),
+                  },
+                ],
+              ];
+            }),
+          ),
+        }
+      : {}),
+    ...(Array.isArray(layout) &&
+    layout.every((column) => Array.isArray(column) && column.every(isPaneKind))
+      ? { paneLayout: layout as RightPanelPaneKind[][] }
+      : {}),
+    ...(active !== null && typeof active === "object"
+      ? {
+          paneActiveSurfaceIds: Object.fromEntries(
+            Object.entries(active).filter(
+              ([kind, id]) => isPaneKind(kind) && typeof id === "string",
+            ),
+          ),
+        }
+      : {}),
+  };
+}
+
 export function migratePersistedRightPanelState(persistedState: unknown): {
   byThreadKey: Record<string, ThreadRightPanelState>;
   threadPanelVisibilityByThreadKey: Record<string, ThreadPanelVisibility>;
@@ -611,6 +681,7 @@ export function migratePersistedRightPanelState(persistedState: unknown): {
                       }
                     : {}),
                   ...(validThreadState?.maximized === true ? { maximized: true as const } : {}),
+                  ...persistedPaneState(validThreadState),
                 },
               ];
             }),
@@ -1120,6 +1191,33 @@ export const useRightPanelStore = create<RightPanelStoreState>()(
             isOpen: !current.isOpen,
           })),
         ),
+      togglePane: (ref, kind) => {
+        let toggled = false;
+        set((state) =>
+          userAction(state, scopedThreadKey(ref), (current) => {
+            const next = toggledRightPanelPane(current, kind);
+            toggled = next !== null;
+            return next ?? current;
+          }),
+        );
+        return toggled;
+      },
+      movePane: (ref, kind, move) =>
+        set((state) =>
+          userAction(state, scopedThreadKey(ref), (current) =>
+            movedRightPanelPane(current, kind, move),
+          ),
+        ),
+      resizePanes: (ref, sizes) =>
+        set((state) =>
+          updateThread(state, scopedThreadKey(ref), (current) => {
+            const paneSizes = { ...current.paneSizes };
+            for (const kind of RIGHT_PANEL_PANE_KINDS) {
+              if (sizes[kind]) paneSizes[kind] = { ...paneSizes[kind], ...sizes[kind] };
+            }
+            return { ...current, paneSizes };
+          }),
+        ),
       toggle: (ref, kind) =>
         set((state) =>
           userAction(state, scopedThreadKey(ref), (current) => {
@@ -1273,6 +1371,18 @@ export function selectActiveRightPanel(
   const state = selectThreadRightPanelState(byThreadKey, ref);
   if (!state.isOpen) return null;
   return state.surfaces.find((surface) => surface.id === state.activeSurfaceId)?.kind ?? null;
+}
+
+/** Whether a pane is on screen, focused or not. */
+export function selectRightPanelPaneShowing(
+  byThreadKey: Record<string, ThreadRightPanelState>,
+  ref: ScopedThreadRef | null | undefined,
+  kind: RightPanelPaneKind,
+): boolean {
+  const state = selectThreadRightPanelState(byThreadKey, ref);
+  return (
+    state.isOpen && resolveRightPanelPaneState(state).layout.some((column) => column.includes(kind))
+  );
 }
 
 export function selectActiveRightPanelSurface(

@@ -1,8 +1,8 @@
 import { usePreviewPanelInlineSize } from "../../hooks/usePreviewPanelInlineSize";
 import { RightPanelSheet } from "../RightPanelSheet";
-import { RightPanelTabs, type RightPanelTabsProps } from "../RightPanelTabs";
+import { RightPanelPanes, RightPanelTabs, type RightPanelPanesProps } from "../RightPanelTabs";
 
-type ChatRightPanelProps = Omit<RightPanelTabsProps, "mode" | "inlineSize" | "maximized"> & {
+type ChatRightPanelProps = Omit<RightPanelPanesProps, "mode" | "inlineSize" | "maximized"> & {
   readonly sheet: boolean;
   readonly maximized: boolean;
   readonly workspaceLayoutElement: HTMLElement | null;
@@ -25,6 +25,13 @@ export function ChatRightPanel(props: ChatRightPanelProps) {
     onCloseSheet,
     maximized,
     layoutControls,
+    panes,
+    paneSizes,
+    cornerControls,
+    renderPane,
+    onMovePane,
+    onHidePane,
+    onResizePanes,
     ...tabs
   } = props;
   const inlineSize = usePreviewPanelInlineSize({
@@ -32,7 +39,21 @@ export function ChatRightPanel(props: ChatRightPanelProps) {
     widthStorageKey,
   });
   if (!sheet) {
-    return <RightPanelTabs {...tabs} mode="inline" maximized={maximized} inlineSize={inlineSize} />;
+    return (
+      <RightPanelPanes
+        {...tabs}
+        panes={panes}
+        paneSizes={paneSizes}
+        cornerControls={cornerControls}
+        onResizePanes={onResizePanes}
+        renderPane={renderPane}
+        onMovePane={onMovePane}
+        onHidePane={onHidePane}
+        mode="inline"
+        maximized={maximized}
+        inlineSize={inlineSize}
+      />
+    );
   }
   return (
     <RightPanelSheet

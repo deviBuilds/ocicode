@@ -24,7 +24,7 @@ import {
 } from "../reopenClosedView";
 import {
   PULL_REQUESTS_PANEL_REF,
-  selectActiveRightPanel,
+  selectRightPanelPaneShowing,
   selectSelectedRightPanelSurface,
   selectThreadRightPanelState,
   useRightPanelStore,
@@ -73,8 +73,8 @@ export function ReopenClosedViewShortcut() {
     (state) =>
       selectThreadTerminalUiState(state.terminalUiStateByThreadKey, threadRef).terminalOpen,
   );
-  const previewOpen = useRightPanelStore(
-    (state) => selectActiveRightPanel(state.byThreadKey, threadRef) === "preview",
+  const previewOpen = useRightPanelStore((state) =>
+    selectRightPanelPaneShowing(state.byThreadKey, threadRef, "browser"),
   );
   const keybindings = useAtomValue(primaryServerKeybindingsAtom);
   const hasHistory = useClosedViewStore((state) => state.entries.length > 0);
